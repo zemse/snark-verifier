@@ -2,8 +2,9 @@
 
 use ark_std::{end_timer, start_timer};
 use common::*;
-use halo2_base::halo2_proofs;
+use halo2_base::gates::flex_gate::GateStrategy;
 use halo2_base::utils::fs::gen_srs;
+use halo2_base::{gates::builder::FlexGateConfigParams, halo2_proofs};
 use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
     dev::MockProver,
@@ -42,7 +43,7 @@ use snark_verifier::{
     verifier::{self, PlonkProof, PlonkVerifier},
     Protocol,
 };
-use std::{fs, iter, marker::PhantomData, rc::Rc};
+use std::{env::set_var, fs, iter, marker::PhantomData, rc::Rc};
 
 use crate::recursion::AggregationConfigParams;
 
@@ -318,6 +319,7 @@ mod recursion {
             range::RangeConfig,
             GateInstructions, RangeChip, RangeInstructions,
         },
+        halo2_proofs::poly::commitment::Params,
         AssignedValue, Context,
         QuantumCell::Existing,
     };
@@ -506,7 +508,7 @@ mod recursion {
 
             let builder = GateThreadBuilder::mock();
             let inner = RangeCircuitBuilder::mock(builder);
-            let circuit = Self {
+            let mut circuit = Self {
                 svk,
                 default_accumulator,
                 app: app.into(),
@@ -536,7 +538,6 @@ mod recursion {
             .map(|instance| main_gate.assign_integer(ctx, instance));
             let first_round = main_gate.is_zero(ctx.main(0), round);
             let not_first_round = main_gate.not(ctx.main(0), first_round);
-            drop(ctx);
 
             let fp_chip = FpChip::<Fr>::new(&range, BITS, LIMBS);
             let ecc_chip = BaseFieldEccChip::new(&fp_chip);
@@ -601,10 +602,7 @@ mod recursion {
                     &previous_instances[Self::STATE_ROW],
                 ),
                 // Verify round is increased by 1 when not at first round
-                (
-                    &round,
-                    &main_gate.add(&mut ctx, not_first_round, previous_instances[Self::ROUND_ROW]),
-                ),
+                (&round, &main_gate.add(ctx, not_first_round, previous_instances[Self::ROUND_ROW])),
             ] {
                 ctx.constrain_equal(lhs, rhs);
             }
@@ -677,8 +675,8 @@ mod recursion {
             let mut first_pass = halo2_base::SKIP_FIRST_PASS; // assume using simple floor planner
             layouter
                 .assign_region(
-                    || "",
-                    |region| {
+                    || "Recursion Circuit",
+                    |mut region| {
                         if first_pass {
                             first_pass = false;
                             return Ok(());
@@ -744,6 +742,9 @@ mod recursion {
             Fr::zero(),
             0,
         );
+        // we cannot auto-configure the circuit because dummy_snark must know the configuration beforehand
+        // uncomment the following line only in development to test and print out the optimal configuration ahead of time
+        // recursion.inner.0.builder.borrow().config(recursion_params.k() as usize, Some(10));
         gen_pk(recursion_params, &recursion)
     }
 
@@ -782,9 +783,18 @@ mod recursion {
 fn main() {
     let app_params = gen_srs(3);
     let recursion_config: AggregationConfigParams =
-        serde_json::from_reader(fs::File::open("configs/verify_circuit.json").unwrap()).unwrap();
+        serde_json::from_reader(fs::File::open("configs/example_recursion.json").unwrap()).unwrap();
     let k = recursion_config.degree;
     let recursion_params = gen_srs(k);
+    let flex_gate_config = FlexGateConfigParams {
+        strategy: GateStrategy::Vertical,
+        k: k as usize,
+        num_advice_per_phase: vec![recursion_config.num_advice],
+        num_lookup_advice_per_phase: vec![recursion_config.num_lookup_advice],
+        num_fixed: recursion_config.num_fixed,
+    };
+    set_var("FLEX_GATE_CONFIG_PARAMS", serde_json::to_string(&flex_gate_config).unwrap());
+    set_var("LOOKUP_BITS", recursion_config.lookup_bits.to_string());
 
     let app_pk = gen_pk(&app_params, &application::Square::default());
 
