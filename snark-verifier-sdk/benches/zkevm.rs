@@ -1,6 +1,6 @@
 use ark_std::{end_timer, start_timer};
-use halo2_base::halo2_proofs;
 use halo2_base::utils::fs::gen_srs;
+use halo2_base::{gates::builder::CircuitBuilderStage, halo2_proofs};
 use halo2_proofs::halo2curves::bn256::Fr;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -53,10 +53,6 @@ pub mod zkevm {
 }
 
 fn bench(c: &mut Criterion) {
-    let mut rng = ChaCha20Rng::from_entropy();
-    let mut transcript =
-        PoseidonTranscript::<NativeLoader, _>::from_spec(vec![], POSEIDON_SPEC.clone());
-
     // === create zkevm evm circuit snark ===
     let k: u32 = var("DEGREE")
         .unwrap_or_else(|_| {
@@ -68,13 +64,12 @@ fn bench(c: &mut Criterion) {
     let circuit = zkevm::test_circuit();
     let params_app = gen_srs(k);
     let pk = gen_pk(&params_app, &circuit, Some(Path::new("data/zkevm_evm.pkey")));
-    let snark =
-        gen_snark_shplonk(&params_app, &pk, circuit, Some(Path::new("data/zkevm_evm.snark")));
+    let snark = gen_snark_shplonk(&params_app, &pk, circuit, None::<&str>);
     let snarks = [snark];
     // === finished zkevm evm circuit ===
 
     // === now to do aggregation ===
-    let path = "./configs/bench_zkevm.config";
+    let path = "./configs/bench_zkevm.json";
     let agg_config = AggregationConfigParams::from_path(path);
     let k = agg_config.degree;
     let lookup_bits = k as usize - 1;
@@ -106,14 +101,15 @@ fn bench(c: &mut Criterion) {
         let deployment_code = gen_evm_verifier_shplonk::<AggregationCircuit>(
             &params,
             pk.get_vk(),
-            num_instances,
-            None::<&str>,
+            num_instances.clone(),
+            None,
         );
 
         evm_verify(deployment_code, instances.clone(), proof);
 
         let start2 = start_timer!(|| "Create EVM GWC proof");
-        let agg_circuit = AggregationCircuit::new::<GWC>(
+        let agg_circuit = AggregationCircuit::new::<SHPLONK>(
+            // note this is still SHPLONK because it refers to how the evm circuit's snark was generated, NOT how the aggregation proof is going to be generated
             CircuitBuilderStage::Prover,
             Some(break_points.clone()),
             lookup_bits,
@@ -123,11 +119,11 @@ fn bench(c: &mut Criterion) {
         let proof = gen_evm_proof_gwc(&params, &pk, agg_circuit, instances.clone());
         end_timer!(start2);
 
-        let deployment_code = gen_evm_verifier_shplonk::<AggregationCircuit>(
+        let deployment_code = gen_evm_verifier_gwc::<AggregationCircuit>(
             &params,
             pk.get_vk(),
-            num_instances,
-            None::<&str>,
+            num_instances.clone(),
+            None,
         );
 
         evm_verify(deployment_code, instances, proof);

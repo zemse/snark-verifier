@@ -165,7 +165,7 @@ mod zkevm {
         fn instances(&self) -> Vec<Vec<F>> {
             vec![]
         }
-        fn num_instance() -> Vec<usize> {
+        fn num_instance(&self) -> Vec<usize> {
             vec![]
         }
     }
@@ -174,7 +174,7 @@ mod zkevm {
         fn instances(&self) -> Vec<Vec<F>> {
             vec![]
         }
-        fn num_instance() -> Vec<usize> {
+        fn num_instance(&self) -> Vec<usize> {
             vec![]
         }
     }

@@ -38,7 +38,13 @@ use snark_verifier::{
     util::arithmetic::fe_to_limbs,
     verifier::PlonkVerifier,
 };
-use std::{collections::HashMap, env::set_var, fs::File, path::Path, rc::Rc};
+use std::{
+    collections::HashMap,
+    env::{set_var, var},
+    fs::File,
+    path::Path,
+    rc::Rc,
+};
 
 use super::{CircuitExt, PoseidonTranscript, Snark, POSEIDON_SPEC};
 
@@ -342,6 +348,7 @@ impl AggregationCircuit {
     }
 
     // this function is for convenience
+    /// `params` should be the universal trusted setup to be used for the aggregation circuit, not the one used to generate the previous snarks, although we assume both use the same generator g[0]
     pub fn keygen<MOS>(params: &ParamsKZG<Bn256>, snarks: impl IntoIterator<Item = Snark>) -> Self
     where
         for<'a> MOS: PolynomialCommitmentScheme<
@@ -359,6 +366,38 @@ impl AggregationCircuit {
         let circuit =
             Self::new::<MOS>(CircuitBuilderStage::Keygen, None, lookup_bits, params, snarks);
         circuit.config(params.k(), Some(10));
+        set_var("LOOKUP_BITS", lookup_bits.to_string());
+        circuit
+    }
+
+    // this function is for convenience
+    pub fn prover<MOS>(
+        params: &ParamsKZG<Bn256>,
+        snarks: impl IntoIterator<Item = Snark>,
+        break_points: MultiPhaseThreadBreakPoints,
+    ) -> Self
+    where
+        for<'a> MOS: PolynomialCommitmentScheme<
+                G1Affine,
+                Rc<Halo2Loader<'a>>,
+                Accumulator = KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>,
+            > + MultiOpenScheme<G1Affine, Rc<Halo2Loader<'a>>, SuccinctVerifyingKey = Svk>
+            + PolynomialCommitmentScheme<
+                G1Affine,
+                NativeLoader,
+                Accumulator = KzgAccumulator<G1Affine, NativeLoader>,
+            > + MultiOpenScheme<G1Affine, NativeLoader, SuccinctVerifyingKey = Svk>,
+    {
+        let lookup_bits: usize = var("LOOKUP_BITS").expect("LOOKUP_BITS not set").parse().unwrap();
+        let circuit = Self::new::<MOS>(
+            CircuitBuilderStage::Prover,
+            Some(break_points),
+            lookup_bits,
+            params,
+            snarks,
+        );
+        let minimum_rows = var("MINIMUM_ROWS").map(|s| s.parse().unwrap_or(10)).unwrap_or(10);
+        circuit.config(params.k(), Some(minimum_rows));
         set_var("LOOKUP_BITS", lookup_bits.to_string());
         circuit
     }

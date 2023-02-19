@@ -75,6 +75,7 @@ mod common {
         hasher.squeeze()
     }
 
+    #[derive(Clone)]
     pub struct Snark {
         pub protocol: Protocol<G1Affine>,
         pub instances: Vec<Vec<Fr>>,
@@ -85,44 +86,9 @@ mod common {
         pub fn new(protocol: Protocol<G1Affine>, instances: Vec<Vec<Fr>>, proof: Vec<u8>) -> Self {
             Self { protocol, instances, proof }
         }
-    }
 
-    impl From<Snark> for SnarkWitness {
-        fn from(snark: Snark) -> Self {
-            Self {
-                protocol: snark.protocol,
-                instances: snark
-                    .instances
-                    .into_iter()
-                    .map(|instances| instances.into_iter().map(Value::known).collect_vec())
-                    .collect(),
-                proof: Value::known(snark.proof),
-            }
-        }
-    }
-
-    #[derive(Clone)]
-    pub struct SnarkWitness {
-        pub protocol: Protocol<G1Affine>,
-        pub instances: Vec<Vec<Value<Fr>>>,
-        pub proof: Value<Vec<u8>>,
-    }
-
-    impl SnarkWitness {
-        pub fn without_witnesses(&self) -> Self {
-            SnarkWitness {
-                protocol: self.protocol.clone(),
-                instances: self
-                    .instances
-                    .iter()
-                    .map(|instances| vec![Value::unknown(); instances.len()])
-                    .collect(),
-                proof: Value::unknown(),
-            }
-        }
-
-        pub fn proof(&self) -> Value<&[u8]> {
-            self.proof.as_ref().map(Vec::as_slice)
+        pub fn proof(&self) -> &[u8] {
+            &self.proof[..]
         }
     }
 
@@ -344,19 +310,25 @@ mod application {
 }
 
 mod recursion {
-    use std::fs::File;
+    use std::{collections::HashMap, env::var, fs::File};
 
     use halo2_base::{
-        gates::GateInstructions, AssignedValue, Context, ContextParams, QuantumCell::Existing,
+        gates::{
+            builder::{GateThreadBuilder, RangeCircuitBuilder},
+            range::RangeConfig,
+            GateInstructions, RangeChip, RangeInstructions,
+        },
+        AssignedValue, Context,
+        QuantumCell::Existing,
     };
-    use halo2_ecc::ecc::EccChip;
+    use halo2_ecc::{bn254::FpChip, ecc::EccChip, fields::fp::FpConfig};
     use halo2_proofs::plonk::{Column, Instance};
     use snark_verifier::loader::halo2::{EccInstructions, IntegerInstructions};
 
     use super::*;
 
-    type BaseFieldEccChip = halo2_ecc::ecc::BaseFieldEccChip<G1Affine>;
-    type Halo2Loader<'a> = loader::halo2::Halo2Loader<'a, G1Affine, BaseFieldEccChip>;
+    type BaseFieldEccChip<'chip> = halo2_ecc::ecc::BaseFieldEccChip<'chip, G1Affine>;
+    type Halo2Loader<'chip> = loader::halo2::Halo2Loader<G1Affine, BaseFieldEccChip<'chip>>;
 
     pub trait StateTransition {
         type Input;
@@ -369,9 +341,9 @@ mod recursion {
     fn succinct_verify<'a>(
         svk: &Svk,
         loader: &Rc<Halo2Loader<'a>>,
-        snark: &SnarkWitness,
-        preprocessed_digest: Option<AssignedValue<'a, Fr>>,
-    ) -> (Vec<Vec<AssignedValue<'a, Fr>>>, Vec<KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>>) {
+        snark: &Snark,
+        preprocessed_digest: Option<AssignedValue<Fr>>,
+    ) -> (Vec<Vec<AssignedValue<Fr>>>, Vec<KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>>) {
         let protocol = if let Some(preprocessed_digest) = preprocessed_digest {
             let preprocessed_digest = loader.scalar_from_assigned(preprocessed_digest);
             let protocol = snark.protocol.loaded_preprocessed_as_witness(loader);
@@ -385,7 +357,7 @@ mod recursion {
                 })
                 .chain(protocol.transcript_initial_state.clone())
                 .collect_vec();
-            loader.assert_eq("", &poseidon(loader, &inputs), &preprocessed_digest).unwrap();
+            loader.assert_eq("", &poseidon(loader, &inputs), &preprocessed_digest);
             protocol
         } else {
             snark.protocol.loaded(loader)
@@ -415,14 +387,16 @@ mod recursion {
 
     fn select_accumulator<'a>(
         loader: &Rc<Halo2Loader<'a>>,
-        condition: &AssignedValue<'a, Fr>,
+        condition: &AssignedValue<Fr>,
         lhs: &KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>,
         rhs: &KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>,
     ) -> Result<KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>, Error> {
         let [lhs, rhs]: [_; 2] = [lhs.lhs.assigned(), lhs.rhs.assigned()]
             .iter()
             .zip([rhs.lhs.assigned(), rhs.rhs.assigned()].iter())
-            .map(|(lhs, rhs)| loader.ecc_chip().select(&mut loader.ctx_mut(), lhs, rhs, condition))
+            .map(|(lhs, rhs)| {
+                loader.ecc_chip().select(&mut loader.ctx_mut().main(0), lhs, rhs, *condition)
+            })
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
@@ -435,7 +409,7 @@ mod recursion {
     fn accumulate<'a>(
         loader: &Rc<Halo2Loader<'a>>,
         accumulators: Vec<KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>>,
-        as_proof: Value<&'_ [u8]>,
+        as_proof: &[u8],
     ) -> KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>> {
         let mut transcript = PoseidonTranscript::<Rc<Halo2Loader>, _>::new(loader, as_proof);
         let proof = As::read_proof(&Default::default(), &accumulators, &mut transcript).unwrap();
@@ -444,71 +418,31 @@ mod recursion {
 
     #[derive(serde::Serialize, serde::Deserialize)]
     pub struct AggregationConfigParams {
-        pub strategy: halo2_ecc::fields::fp::FpStrategy,
         pub degree: u32,
         pub num_advice: usize,
         pub num_lookup_advice: usize,
         pub num_fixed: usize,
         pub lookup_bits: usize,
-        pub limb_bits: usize,
-        pub num_limbs: usize,
     }
 
     #[derive(Clone)]
     pub struct RecursionConfig {
-        pub base_field_config: halo2_ecc::fields::fp::FpConfig<Fr, Fq>,
+        pub range: RangeConfig<Fr>,
         pub instance: Column<Instance>,
-    }
-
-    impl RecursionConfig {
-        pub fn configure(meta: &mut ConstraintSystem<Fr>, params: AggregationConfigParams) -> Self {
-            assert!(
-                params.limb_bits == BITS && params.num_limbs == LIMBS,
-                "For now we fix limb_bits = {}, otherwise change code",
-                BITS
-            );
-            let base_field_config = halo2_ecc::fields::fp::FpConfig::configure(
-                meta,
-                params.strategy,
-                &[params.num_advice],
-                &[params.num_lookup_advice],
-                params.num_fixed,
-                params.lookup_bits,
-                params.limb_bits,
-                params.num_limbs,
-                halo2_base::utils::modulus::<Fq>(),
-                0,
-                params.degree as usize,
-            );
-
-            let instance = meta.instance_column();
-            meta.enable_equality(instance);
-
-            Self { base_field_config, instance }
-        }
-
-        pub fn gate(&self) -> &halo2_base::gates::flex_gate::FlexGateConfig<Fr> {
-            &self.base_field_config.range.gate
-        }
-
-        pub fn range(&self) -> &halo2_base::gates::range::RangeConfig<Fr> {
-            &self.base_field_config.range
-        }
-
-        pub fn ecc_chip(&self) -> halo2_ecc::ecc::BaseFieldEccChip<G1Affine> {
-            EccChip::construct(self.base_field_config.clone())
-        }
     }
 
     #[derive(Clone)]
     pub struct RecursionCircuit {
         svk: Svk,
         default_accumulator: KzgAccumulator<G1Affine, NativeLoader>,
-        app: SnarkWitness,
-        previous: SnarkWitness,
+        app: Snark,
+        previous: Snark,
         round: usize,
         instances: Vec<Fr>,
-        as_proof: Value<Vec<u8>>,
+        as_proof: Vec<u8>,
+
+        inner: RangeCircuitBuilder<Fr>,
+        assigned_instances: Vec<AssignedValue<Fr>>,
     }
 
     impl RecursionCircuit {
@@ -570,15 +504,119 @@ mod recursion {
                     .chain([preprocessed_digest, initial_state, state, Fr::from(round as u64)])
                     .collect();
 
-            Self {
+            let builder = GateThreadBuilder::mock();
+            let inner = RangeCircuitBuilder::mock(builder);
+            let circuit = Self {
                 svk,
                 default_accumulator,
                 app: app.into(),
                 previous: previous.into(),
                 round,
                 instances,
-                as_proof: Value::known(as_proof),
+                as_proof,
+                inner,
+                assigned_instances: vec![],
+            };
+            circuit.build();
+            circuit
+        }
+
+        fn build(&mut self) {
+            let lookup_bits = var("LOOKUP_BITS").unwrap().parse().unwrap();
+            let range = RangeChip::<Fr>::default(lookup_bits);
+            let main_gate = range.gate();
+            let mut builder = GateThreadBuilder::mock();
+            let ctx = &mut builder;
+            let [preprocessed_digest, initial_state, state, round] = [
+                self.instances[Self::PREPROCESSED_DIGEST_ROW],
+                self.instances[Self::INITIAL_STATE_ROW],
+                self.instances[Self::STATE_ROW],
+                self.instances[Self::ROUND_ROW],
+            ]
+            .map(|instance| main_gate.assign_integer(ctx, instance));
+            let first_round = main_gate.is_zero(ctx.main(0), round);
+            let not_first_round = main_gate.not(ctx.main(0), first_round);
+            drop(ctx);
+
+            let fp_chip = FpChip::<Fr>::new(&range, BITS, LIMBS);
+            let ecc_chip = BaseFieldEccChip::new(&fp_chip);
+            let loader = Halo2Loader::new(ecc_chip, builder);
+            let (mut app_instances, app_accumulators) =
+                succinct_verify(&self.svk, &loader, &self.app, None);
+            let (mut previous_instances, previous_accumulators) = succinct_verify(
+                &self.svk,
+                &loader,
+                &self.previous,
+                Some(preprocessed_digest.clone()),
+            );
+
+            let default_accmulator = self.load_default_accumulator(&loader).unwrap();
+            let previous_accumulators = previous_accumulators
+                .iter()
+                .map(|previous_accumulator| {
+                    select_accumulator(
+                        &loader,
+                        &first_round,
+                        &default_accmulator,
+                        previous_accumulator,
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+
+            let KzgAccumulator { lhs, rhs } = accumulate(
+                &loader,
+                [app_accumulators, previous_accumulators].concat(),
+                self.as_proof(),
+            );
+
+            let lhs = lhs.into_assigned();
+            let rhs = rhs.into_assigned();
+            let app_instances = app_instances.pop().unwrap();
+            let previous_instances = previous_instances.pop().unwrap();
+
+            let mut builder = loader.take_ctx();
+            let ctx = builder.main(0);
+            for (lhs, rhs) in [
+                // Propagate preprocessed_digest
+                (
+                    &main_gate.mul(ctx, preprocessed_digest, not_first_round),
+                    &previous_instances[Self::PREPROCESSED_DIGEST_ROW],
+                ),
+                // Propagate initial_state
+                (
+                    &main_gate.mul(ctx, initial_state, not_first_round),
+                    &previous_instances[Self::INITIAL_STATE_ROW],
+                ),
+                // Verify initial_state is same as the first application snark
+                (
+                    &main_gate.mul(ctx, initial_state, first_round),
+                    &main_gate.mul(ctx, app_instances[0], first_round),
+                ),
+                // Verify current state is same as the current application snark
+                (&state, &app_instances[1]),
+                // Verify previous state is same as the current application snark
+                (
+                    &main_gate.mul(ctx, app_instances[0], not_first_round),
+                    &previous_instances[Self::STATE_ROW],
+                ),
+                // Verify round is increased by 1 when not at first round
+                (
+                    &round,
+                    &main_gate.add(&mut ctx, not_first_round, previous_instances[Self::ROUND_ROW]),
+                ),
+            ] {
+                ctx.constrain_equal(lhs, rhs);
             }
+            *self.inner.0.builder.borrow_mut() = builder;
+
+            self.assigned_instances.extend(
+                [lhs.x(), lhs.y(), rhs.x(), rhs.y()]
+                    .into_iter()
+                    .flat_map(|coordinate| coordinate.limbs())
+                    .chain([preprocessed_digest, initial_state, state, round].iter())
+                    .copied(),
+            );
         }
 
         fn initial_snark(params: &ParamsKZG<Bn256>, vk: Option<&VerifyingKey<G1Affine>>) -> Snark {
@@ -592,8 +630,8 @@ mod recursion {
             snark
         }
 
-        fn as_proof(&self) -> Value<&[u8]> {
-            self.as_proof.as_ref().map(Vec::as_slice)
+        fn as_proof(&self) -> &[u8] {
+            &self.as_proof[..]
         }
 
         fn load_default_accumulator<'a>(
@@ -603,7 +641,7 @@ mod recursion {
             let [lhs, rhs] =
                 [self.default_accumulator.lhs, self.default_accumulator.rhs].map(|default| {
                     let assigned =
-                        loader.ecc_chip().assign_constant(&mut loader.ctx_mut(), default).unwrap();
+                        loader.ecc_chip().assign_constant(&mut loader.ctx_mut(), default);
                     loader.ec_point_from_assigned(assigned)
                 });
             Ok(KzgAccumulator::new(lhs, rhs))
@@ -615,26 +653,14 @@ mod recursion {
         type FloorPlanner = SimpleFloorPlanner;
 
         fn without_witnesses(&self) -> Self {
-            Self {
-                svk: self.svk,
-                default_accumulator: self.default_accumulator.clone(),
-                app: self.app.without_witnesses(),
-                previous: self.previous.without_witnesses(),
-                round: self.round,
-                instances: self.instances.clone(),
-                as_proof: Value::unknown(),
-            }
+            unimplemented!()
         }
 
         fn configure(meta: &mut plonk::ConstraintSystem<Fr>) -> Self::Config {
-            let path = std::env::var("VERIFY_CONFIG")
-                .unwrap_or_else(|_| "configs/verify_circuit.config".to_owned());
-            let params: AggregationConfigParams = serde_json::from_reader(
-                File::open(path.as_str()).unwrap_or_else(|err| panic!("{err:?}")),
-            )
-            .unwrap();
-
-            RecursionConfig::configure(meta, params)
+            let range = RangeCircuitBuilder::configure(meta);
+            let instance = meta.instance_column();
+            meta.enable_equality(instance);
+            RecursionConfig { range, instance }
         }
 
         fn synthesize(
@@ -642,152 +668,44 @@ mod recursion {
             config: Self::Config,
             mut layouter: impl Layouter<Fr>,
         ) -> Result<(), Error> {
-            config.range().load_lookup_table(&mut layouter)?;
-            let max_rows = config.range().gate.max_rows;
-            let main_gate = config.gate();
+            let range = config.range;
+            range.load_lookup_table(&mut layouter).expect("load lookup table should not fail");
+            let circuit = &self.inner.0;
 
+            let mut assigned_advices = HashMap::new();
+            // POC so will only do mock prover and not real prover
             let mut first_pass = halo2_base::SKIP_FIRST_PASS; // assume using simple floor planner
-            let mut assigned_instances = Vec::new();
-            layouter.assign_region(
-                || "",
-                |region| {
-                    if first_pass {
-                        first_pass = false;
-                        return Ok(());
-                    }
-                    let mut ctx = Context::new(
-                        region,
-                        ContextParams {
-                            max_rows,
-                            num_context_ids: 1,
-                            fixed_columns: config.base_field_config.range.gate.constants.clone(),
-                        },
-                    );
+            layouter
+                .assign_region(
+                    || "",
+                    |region| {
+                        if first_pass {
+                            first_pass = false;
+                            return Ok(());
+                        }
+                        // clone the builder so we can re-use the circuit for both vk and pk gen
+                        let builder = circuit.builder.borrow();
+                        let assignments = builder.assign_all(
+                            &range.gate,
+                            &range.lookup_advice,
+                            &range.q_lookup,
+                            &mut region,
+                        );
+                        *circuit.break_points.borrow_mut() = assignments.break_points;
+                        assigned_advices = assignments.assigned_advices;
+                        Ok(())
+                    },
+                )
+                .unwrap();
 
-                    let [preprocessed_digest, initial_state, state, round] = [
-                        self.instances[Self::PREPROCESSED_DIGEST_ROW],
-                        self.instances[Self::INITIAL_STATE_ROW],
-                        self.instances[Self::STATE_ROW],
-                        self.instances[Self::ROUND_ROW],
-                    ]
-                    .map(|instance| {
-                        main_gate.assign_integer(&mut ctx, Value::known(instance)).unwrap()
-                    });
-                    let first_round = main_gate.is_zero(&mut ctx, &round);
-                    let not_first_round = main_gate.not(&mut ctx, Existing(&first_round));
-
-                    let loader = Halo2Loader::new(config.ecc_chip(), ctx);
-                    let (mut app_instances, app_accumulators) =
-                        succinct_verify(&self.svk, &loader, &self.app, None);
-                    let (mut previous_instances, previous_accumulators) = succinct_verify(
-                        &self.svk,
-                        &loader,
-                        &self.previous,
-                        Some(preprocessed_digest.clone()),
-                    );
-
-                    let default_accmulator = self.load_default_accumulator(&loader)?;
-                    let previous_accumulators = previous_accumulators
-                        .iter()
-                        .map(|previous_accumulator| {
-                            select_accumulator(
-                                &loader,
-                                &first_round,
-                                &default_accmulator,
-                                previous_accumulator,
-                            )
-                        })
-                        .collect::<Result<Vec<_>, Error>>()?;
-
-                    let KzgAccumulator { lhs, rhs } = accumulate(
-                        &loader,
-                        [app_accumulators, previous_accumulators].concat(),
-                        self.as_proof(),
-                    );
-
-                    let lhs = lhs.into_assigned();
-                    let rhs = rhs.into_assigned();
-                    let app_instances = app_instances.pop().unwrap();
-                    let previous_instances = previous_instances.pop().unwrap();
-
-                    let mut ctx = loader.ctx_mut();
-                    for (lhs, rhs) in [
-                        // Propagate preprocessed_digest
-                        (
-                            &main_gate.mul(
-                                &mut ctx,
-                                Existing(&preprocessed_digest),
-                                Existing(&not_first_round),
-                            ),
-                            &previous_instances[Self::PREPROCESSED_DIGEST_ROW],
-                        ),
-                        // Propagate initial_state
-                        (
-                            &main_gate.mul(
-                                &mut ctx,
-                                Existing(&initial_state),
-                                Existing(&not_first_round),
-                            ),
-                            &previous_instances[Self::INITIAL_STATE_ROW],
-                        ),
-                        // Verify initial_state is same as the first application snark
-                        (
-                            &main_gate.mul(
-                                &mut ctx,
-                                Existing(&initial_state),
-                                Existing(&first_round),
-                            ),
-                            &main_gate.mul(
-                                &mut ctx,
-                                Existing(&app_instances[0]),
-                                Existing(&first_round),
-                            ),
-                        ),
-                        // Verify current state is same as the current application snark
-                        (&state, &app_instances[1]),
-                        // Verify previous state is same as the current application snark
-                        (
-                            &main_gate.mul(
-                                &mut ctx,
-                                Existing(&app_instances[0]),
-                                Existing(&not_first_round),
-                            ),
-                            &previous_instances[Self::STATE_ROW],
-                        ),
-                        // Verify round is increased by 1 when not at first round
-                        (
-                            &round,
-                            &main_gate.add(
-                                &mut ctx,
-                                Existing(&not_first_round),
-                                Existing(&previous_instances[Self::ROUND_ROW]),
-                            ),
-                        ),
-                    ] {
-                        ctx.region.constrain_equal(lhs.cell(), rhs.cell());
-                    }
-
-                    // IMPORTANT:
-                    config.base_field_config.finalize(&mut ctx);
-                    #[cfg(feature = "display")]
-                    dbg!(ctx.total_advice);
-                    #[cfg(feature = "display")]
-                    println!("Advice columns used: {}", ctx.advice_alloc[0][0].0 + 1);
-
-                    assigned_instances.extend(
-                        [lhs.x(), lhs.y(), rhs.x(), rhs.y()]
-                            .into_iter()
-                            .flat_map(|coordinate| coordinate.limbs())
-                            .chain([preprocessed_digest, initial_state, state, round].iter())
-                            .map(|assigned| assigned.cell()),
-                    );
-                    Ok(())
-                },
-            )?;
-
-            assert_eq!(assigned_instances.len(), 4 * LIMBS + 4);
-            for (row, limb) in assigned_instances.into_iter().enumerate() {
-                layouter.constrain_instance(limb, config.instance, row);
+            // expose public instances
+            let mut layouter = layouter.namespace(|| "expose");
+            for (i, instance) in self.assigned_instances.iter().enumerate() {
+                let cell = instance.cell.unwrap();
+                let (cell, _) = assigned_advices
+                    .get(&(cell.context_id, cell.offset))
+                    .expect("instance not assigned");
+                layouter.constrain_instance(*cell, config.instance, i);
             }
 
             Ok(())
@@ -809,10 +727,7 @@ mod recursion {
         }
 
         fn selectors(config: &Self::Config) -> Vec<Selector> {
-            config.base_field_config.range.gate.basic_gates[0]
-                .iter()
-                .map(|gate| gate.q_enable)
-                .collect()
+            config.range.gate.basic_gates[0].iter().map(|gate| gate.q_enable).collect()
         }
     }
 
@@ -867,7 +782,7 @@ mod recursion {
 fn main() {
     let app_params = gen_srs(3);
     let recursion_config: AggregationConfigParams =
-        serde_json::from_reader(fs::File::open("configs/verify_circuit.config").unwrap()).unwrap();
+        serde_json::from_reader(fs::File::open("configs/verify_circuit.json").unwrap()).unwrap();
     let k = recursion_config.degree;
     let recursion_params = gen_srs(k);
 
