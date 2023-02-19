@@ -1,9 +1,6 @@
-use crate::{
-    util::{
-        arithmetic::{CurveAffine, FieldOps, PrimeField},
-        Itertools,
-    },
-    Error,
+use crate::util::{
+    arithmetic::{CurveAffine, FieldOps, PrimeField},
+    Itertools,
 };
 use std::{borrow::Cow, fmt::Debug, iter, ops::Deref};
 
@@ -83,7 +80,7 @@ pub trait EcPointLoader<C: CurveAffine> {
         annotation: &str,
         lhs: &Self::LoadedEcPoint,
         rhs: &Self::LoadedEcPoint,
-    ) -> Result<(), Error>;
+    );
 
     fn multi_scalar_multiplication(
         pairs: &[(&Self::LoadedScalar, &Self::LoadedEcPoint)],
@@ -105,12 +102,7 @@ pub trait ScalarLoader<F: PrimeField> {
         self.load_const(&F::one())
     }
 
-    fn assert_eq(
-        &self,
-        annotation: &str,
-        lhs: &Self::LoadedScalar,
-        rhs: &Self::LoadedScalar,
-    ) -> Result<(), Error>;
+    fn assert_eq(&self, annotation: &str, lhs: &Self::LoadedScalar, rhs: &Self::LoadedScalar);
 
     fn sum_with_coeff_and_const(
         &self,
@@ -151,11 +143,7 @@ pub trait ScalarLoader<F: PrimeField> {
 
         let loader = values.first().unwrap().1.loader();
         iter::empty()
-            .chain(if constant == F::zero() {
-                None
-            } else {
-                Some(loader.load_const(&constant))
-            })
+            .chain(if constant == F::zero() { None } else { Some(loader.load_const(&constant)) })
             .chain(values.iter().map(|&(coeff, lhs, rhs)| {
                 if coeff == F::one() {
                     lhs.clone() * rhs
@@ -195,10 +183,7 @@ pub trait ScalarLoader<F: PrimeField> {
         constant: F,
     ) -> Self::LoadedScalar {
         self.sum_products_with_coeff_and_const(
-            &values
-                .iter()
-                .map(|&(lhs, rhs)| (F::one(), lhs, rhs))
-                .collect_vec(),
+            &values.iter().map(|&(lhs, rhs)| (F::one(), lhs, rhs)).collect_vec(),
             constant,
         )
     }
@@ -211,9 +196,7 @@ pub trait ScalarLoader<F: PrimeField> {
     }
 
     fn product(&self, values: &[&Self::LoadedScalar]) -> Self::LoadedScalar {
-        values
-            .iter()
-            .fold(self.load_one(), |acc, value| acc * *value)
+        values.iter().fold(self.load_one(), |acc, value| acc * *value)
     }
 
     fn batch_invert<'a>(values: impl IntoIterator<Item = &'a mut Self::LoadedScalar>)

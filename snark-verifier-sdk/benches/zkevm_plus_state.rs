@@ -76,14 +76,7 @@ fn bench(c: &mut Criterion) {
     let params_app = gen_srs(k);
     let evm_snark = {
         let pk = gen_pk(&params_app, &evm_circuit, Some(Path::new("data/zkevm_evm.pkey")));
-        gen_snark_gwc(
-            &params_app,
-            &pk,
-            evm_circuit,
-            &mut transcript,
-            &mut rng,
-            Some(Path::new("data/zkevm_evm.snark")),
-        )
+        gen_snark_shplonk(&params_app, &pk, evm_circuit, Some(Path::new("data/zkevm_evm.snark")))
     };
     let state_snark = {
         let pk = gen_pk(&params_app, &state_circuit, Some(Path::new("data/zkevm_state.pkey")));
@@ -91,8 +84,6 @@ fn bench(c: &mut Criterion) {
             &params_app,
             &pk,
             state_circuit,
-            &mut transcript,
-            &mut rng,
             Some(Path::new("data/zkevm_state.snark")),
         )
     };
@@ -118,15 +109,7 @@ fn bench(c: &mut Criterion) {
         |b, &(params, pk, agg_circuit)| {
             b.iter(|| {
                 let instances = agg_circuit.instances();
-                gen_proof_shplonk(
-                    params,
-                    pk,
-                    agg_circuit.clone(),
-                    instances,
-                    &mut transcript,
-                    &mut rng,
-                    None,
-                );
+                gen_proof_shplonk(params, pk, agg_circuit.clone(), instances, None);
             })
         },
     );

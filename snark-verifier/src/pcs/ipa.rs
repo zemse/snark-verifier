@@ -1,3 +1,4 @@
+// IPA is turned off in this repo for now!
 use crate::{
     loader::{native::NativeLoader, LoadedScalar, Loader, ScalarLoader},
     pcs::PolynomialCommitmentScheme,
@@ -151,11 +152,8 @@ where
 
         let h_prime = h * &proof.xi_0;
         let lhs = {
-            let c_prime = match (
-                s.as_ref(),
-                proof.c_bar_alpha.as_ref(),
-                proof.omega_prime.as_ref(),
-            ) {
+            let c_prime = match (s.as_ref(), proof.c_bar_alpha.as_ref(), proof.omega_prime.as_ref())
+            {
                 (Some(s), Some((c_bar, alpha)), Some(omega_prime)) => {
                     let s = Msm::<C, L>::base(s);
                     commitment.clone() + Msm::base(c_bar) * alpha - s * omega_prime
@@ -230,9 +228,7 @@ impl<C: CurveAffine> IpaProvingKey<C> {
         let domain = Domain::new(k, root_of_unity(k));
         let mut g = vec![C::default(); 1 << k];
         C::Curve::batch_normalize(
-            &iter::repeat_with(|| C::Curve::random(&mut rng))
-                .take(1 << k)
-                .collect_vec(),
+            &iter::repeat_with(|| C::Curve::random(&mut rng)).take(1 << k).collect_vec(),
             &mut g,
         );
         let h = C::Curve::random(&mut rng).to_affine();
@@ -285,14 +281,7 @@ where
         u: L::LoadedEcPoint,
         c: L::LoadedScalar,
     ) -> Self {
-        Self {
-            c_bar_alpha,
-            omega_prime,
-            xi_0,
-            rounds,
-            u,
-            c,
-        }
+        Self { c_bar_alpha, omega_prime, xi_0, rounds, u, c }
     }
 
     pub fn read<T>(svk: &IpaSuccinctVerifyingKey<C>, transcript: &mut T) -> Result<Self, Error>
@@ -320,14 +309,7 @@ where
         .collect::<Result<Vec<_>, _>>()?;
         let u = transcript.read_ec_point()?;
         let c = transcript.read_scalar()?;
-        Ok(Self {
-            c_bar_alpha,
-            omega_prime,
-            xi_0,
-            rounds,
-            u,
-            c,
-        })
+        Ok(Self { c_bar_alpha, omega_prime, xi_0, rounds, u, c })
     }
 
     pub fn xi(&self) -> Vec<L::LoadedScalar> {
@@ -338,10 +320,7 @@ where
         let mut xi_inv = self.xi().into_iter().map(Fraction::one_over).collect_vec();
         L::batch_invert(xi_inv.iter_mut().filter_map(Fraction::denom_mut));
         xi_inv.iter_mut().for_each(Fraction::evaluate);
-        xi_inv
-            .into_iter()
-            .map(|xi_inv| xi_inv.evaluated().clone())
-            .collect()
+        xi_inv.into_iter().map(|xi_inv| xi_inv.evaluated().clone()).collect()
     }
 }
 

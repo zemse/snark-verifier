@@ -33,7 +33,3 @@ incremental = false
 [profile.flamegraph]
 inherits = "release"
 debug = true
-
-# patch until PR https://github.com/privacy-scaling-explorations/halo2/pull/111 is merged
-[patch."https://github.com/privacy-scaling-explorations/halo2.git"]
-halo2_proofs = { git = "https://github.com/axiom-crypto/halo2.git", branch = "feat/serde-raw" }

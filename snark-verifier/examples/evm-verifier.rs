@@ -140,14 +140,14 @@ impl Circuit<Fr> for StandardPlonk {
                 }
                 #[cfg(feature = "halo2-axiom")]
                 {
-                    region.assign_advice(config.a, 0, Value::known(Assigned::Trivial(self.0)))?;
+                    region.assign_advice(config.a, 0, Value::known(Assigned::Trivial(self.0)));
                     region.assign_fixed(config.q_a, 0, Assigned::Trivial(-Fr::one()));
 
                     region.assign_advice(
                         config.a,
                         1,
                         Value::known(Assigned::Trivial(-Fr::from(5u64))),
-                    )?;
+                    );
                     for (idx, column) in (1..).zip([
                         config.q_a,
                         config.q_b,
@@ -162,7 +162,7 @@ impl Circuit<Fr> for StandardPlonk {
                         config.a,
                         2,
                         Value::known(Assigned::Trivial(Fr::one())),
-                    )?;
+                    );
                     a.copy_advice(&mut region, config.b, 3);
                     a.copy_advice(&mut region, config.c, 4);
                 }

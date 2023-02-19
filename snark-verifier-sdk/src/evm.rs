@@ -3,11 +3,10 @@ use super::{CircuitExt, Plonk};
 use ark_std::{end_timer, start_timer};
 use ethereum_types::Address;
 use halo2_base::halo2_proofs::{
-    dev::MockProver,
     halo2curves::bn256::{Bn256, Fq, Fr, G1Affine},
     plonk::{create_proof, verify_proof, Circuit, ProvingKey, VerifyingKey},
     poly::{
-        commitment::{Params, ParamsProver, Prover, Verifier},
+        commitment::{ParamsProver, Prover, Verifier},
         kzg::{
             commitment::{KZGCommitmentScheme, ParamsKZG},
             msm::DualMSM,
@@ -19,7 +18,7 @@ use halo2_base::halo2_proofs::{
     transcript::{TranscriptReadBuffer, TranscriptWriterBuffer},
 };
 use itertools::Itertools;
-use rand::Rng;
+use rand::{rngs::StdRng, SeedableRng};
 pub use snark_verifier::loader::evm::encode_calldata;
 use snark_verifier::{
     loader::evm::{compile_yul, EvmLoader, ExecutorBuilder},
@@ -38,7 +37,6 @@ pub fn gen_evm_proof<'params, C, P, V>(
     pk: &'params ProvingKey<G1Affine>,
     circuit: C,
     instances: Vec<Vec<Fr>>,
-    rng: &mut (impl Rng + Send),
 ) -> Vec<u8>
 where
     C: Circuit<Fr>,
@@ -50,15 +48,11 @@ where
         MSMAccumulator = DualMSM<'params, Bn256>,
     >,
 {
-    #[cfg(debug_assertions)]
-    {
-        MockProver::run(params.k(), &circuit, instances.clone()).unwrap().assert_satisfied();
-    }
-
     let instances = instances.iter().map(|instances| instances.as_slice()).collect_vec();
 
     #[cfg(feature = "display")]
     let proof_time = start_timer!(|| "Create EVM proof");
+    let rng = StdRng::from_entropy();
     let proof = {
         let mut transcript = TranscriptWriterBuffer::<_, G1Affine, _>::init(Vec::new());
         create_proof::<KZGCommitmentScheme<Bn256>, P, _, _, EvmTranscript<_, _, _, _>, _>(
@@ -98,9 +92,8 @@ pub fn gen_evm_proof_gwc<'params, C: Circuit<Fr>>(
     pk: &'params ProvingKey<G1Affine>,
     circuit: C,
     instances: Vec<Vec<Fr>>,
-    rng: &mut (impl Rng + Send),
 ) -> Vec<u8> {
-    gen_evm_proof::<C, ProverGWC<_>, VerifierGWC<_>>(params, pk, circuit, instances, rng)
+    gen_evm_proof::<C, ProverGWC<_>, VerifierGWC<_>>(params, pk, circuit, instances)
 }
 
 pub fn gen_evm_proof_shplonk<'params, C: Circuit<Fr>>(
@@ -108,9 +101,8 @@ pub fn gen_evm_proof_shplonk<'params, C: Circuit<Fr>>(
     pk: &'params ProvingKey<G1Affine>,
     circuit: C,
     instances: Vec<Vec<Fr>>,
-    rng: &mut (impl Rng + Send),
 ) -> Vec<u8> {
-    gen_evm_proof::<C, ProverSHPLONK<_>, VerifierSHPLONK<_>>(params, pk, circuit, instances, rng)
+    gen_evm_proof::<C, ProverSHPLONK<_>, VerifierSHPLONK<_>>(params, pk, circuit, instances)
 }
 
 pub fn gen_evm_verifier<C, PCS>(

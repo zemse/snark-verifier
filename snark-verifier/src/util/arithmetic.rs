@@ -210,8 +210,9 @@ pub fn fe_to_fe<F1: PrimeField, F2: PrimeField>(fe: F1) -> F2 {
 }
 
 pub fn fe_from_limbs<F1: PrimeField, F2: PrimeField, const LIMBS: usize, const BITS: usize>(
-    limbs: [F1; LIMBS],
+    limbs: &[F1],
 ) -> F2 {
+    assert_eq!(limbs.len(), LIMBS);
     fe_from_big(
         limbs
             .iter()

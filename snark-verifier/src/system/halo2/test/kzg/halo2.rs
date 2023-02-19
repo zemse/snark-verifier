@@ -41,7 +41,7 @@ use crate::{
     verifier::{self, PlonkVerifier},
 };
 use ark_std::{end_timer, start_timer};
-use halo2_base::{Context, ContextParams};
+use halo2_base::Context;
 use halo2_ecc::ecc::EccChip;
 use halo2_ecc::fields::fp::FpConfig;
 use paste::paste;
@@ -58,8 +58,8 @@ const RATE: usize = 4;
 const R_F: usize = 8;
 const R_P: usize = 60;
 
-type BaseFieldEccChip = halo2_ecc::ecc::BaseFieldEccChip<G1Affine>;
-type Halo2Loader<'a> = loader::halo2::Halo2Loader<'a, G1Affine, BaseFieldEccChip>;
+type BaseFieldEccChip<'chip> = halo2_ecc::ecc::BaseFieldEccChip<'chip, G1Affine>;
+type Halo2Loader<'chip> = loader::halo2::Halo2Loader<G1Affine, BaseFieldEccChip<'chip>>;
 type PoseidonTranscript<L, S> = GenericPoseidonTranscript<G1Affine, L, S, T, RATE, R_F, R_P>;
 
 type Pcs = Kzg<Bn256, Bdfg21>;
@@ -68,26 +68,6 @@ type As = KzgAs<Pcs>;
 type AsPk = KzgAsProvingKey<G1Affine>;
 type AsVk = KzgAsVerifyingKey;
 type Plonk = verifier::Plonk<Pcs, LimbsEncoding<LIMBS, BITS>>;
-
-// for tuning the circuit
-#[derive(Serialize, Deserialize)]
-pub struct Halo2VerifierCircuitConfigParams {
-    pub strategy: halo2_ecc::fields::fp::FpStrategy,
-    pub degree: u32,
-    pub num_advice: usize,
-    pub num_lookup_advice: usize,
-    pub num_fixed: usize,
-    pub lookup_bits: usize,
-    pub limb_bits: usize,
-    pub num_limbs: usize,
-}
-
-pub fn load_verify_circuit_degree() -> u32 {
-    let path = "./configs/verify_circuit.config";
-    let params: Halo2VerifierCircuitConfigParams =
-        serde_json::from_reader(File::open(path).unwrap_or_else(|err| panic!("{err:?}"))).unwrap();
-    params.degree
-}
 
 #[derive(Clone)]
 pub struct Halo2VerifierCircuitConfig {

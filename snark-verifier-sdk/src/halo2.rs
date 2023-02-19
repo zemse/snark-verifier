@@ -1,10 +1,9 @@
-use super::{read_instances, write_instances, CircuitExt, Snark, SnarkWitness};
+use super::{read_instances, write_instances, CircuitExt, Plonk, Snark};
 #[cfg(feature = "display")]
 use ark_std::{end_timer, start_timer};
 use halo2_base::halo2_proofs;
 use halo2_proofs::{
     circuit::Layouter,
-    dev::MockProver,
     halo2curves::{
         bn256::{Bn256, Fr, G1Affine},
         group::ff::Field,
@@ -14,7 +13,7 @@ use halo2_proofs::{
         VerifyingKey,
     },
     poly::{
-        commitment::{Params, ParamsProver, Prover, Verifier},
+        commitment::{ParamsProver, Prover, Verifier},
         kzg::{
             commitment::{KZGCommitmentScheme, ParamsKZG},
             msm::DualMSM,
@@ -26,7 +25,7 @@ use halo2_proofs::{
 };
 use itertools::Itertools;
 use lazy_static::lazy_static;
-use rand::Rng;
+use rand::{rngs::StdRng, SeedableRng};
 use snark_verifier::{
     cost::CostEstimation,
     loader::native::NativeLoader,
@@ -74,7 +73,6 @@ pub fn gen_proof<'params, C, P, V>(
     pk: &ProvingKey<G1Affine>,
     circuit: C,
     instances: Vec<Vec<Fr>>,
-    rng: &mut (impl Rng + Send),
     path: Option<(&Path, &Path)>,
 ) -> Vec<u8>
 where
@@ -87,11 +85,6 @@ where
         MSMAccumulator = DualMSM<'params, Bn256>,
     >,
 {
-    #[cfg(debug_assertions)]
-    {
-        MockProver::run(params.k(), &circuit, instances.clone()).unwrap().assert_satisfied();
-    }
-
     if let Some((instance_path, proof_path)) = path {
         let cached_instances = read_instances(instance_path);
         if matches!(cached_instances, Ok(tmp) if tmp == instances) && proof_path.exists() {
@@ -113,6 +106,7 @@ where
 
     let mut transcript =
         PoseidonTranscript::<NativeLoader, Vec<u8>>::from_spec(vec![], POSEIDON_SPEC.clone());
+    let rng = StdRng::from_entropy();
     create_proof::<_, P, _, _, _, _>(params, pk, &[circuit], &[&instances], rng, &mut transcript)
         .unwrap();
     let proof = transcript.finalize();
@@ -150,10 +144,9 @@ pub fn gen_proof_gwc<C: Circuit<Fr>>(
     pk: &ProvingKey<G1Affine>,
     circuit: C,
     instances: Vec<Vec<Fr>>,
-    rng: &mut (impl Rng + Send),
     path: Option<(&Path, &Path)>,
 ) -> Vec<u8> {
-    gen_proof::<C, ProverGWC<_>, VerifierGWC<_>>(params, pk, circuit, instances, rng, path)
+    gen_proof::<C, ProverGWC<_>, VerifierGWC<_>>(params, pk, circuit, instances, path)
 }
 
 /// Generates a native proof using SHPLONK multi-open scheme. Uses Poseidon for Fiat-Shamir.
@@ -164,10 +157,9 @@ pub fn gen_proof_shplonk<C: Circuit<Fr>>(
     pk: &ProvingKey<G1Affine>,
     circuit: C,
     instances: Vec<Vec<Fr>>,
-    rng: &mut (impl Rng + Send),
     path: Option<(&Path, &Path)>,
 ) -> Vec<u8> {
-    gen_proof::<C, ProverSHPLONK<_>, VerifierSHPLONK<_>>(params, pk, circuit, instances, rng, path)
+    gen_proof::<C, ProverSHPLONK<_>, VerifierSHPLONK<_>>(params, pk, circuit, instances, path)
 }
 
 /// Generates a SNARK using either SHPLONK or GWC multi-open scheme. Uses Poseidon for Fiat-Shamir.
@@ -178,7 +170,6 @@ pub fn gen_snark<'params, ConcreteCircuit, P, V>(
     params: &'params ParamsKZG<Bn256>,
     pk: &ProvingKey<G1Affine>,
     circuit: ConcreteCircuit,
-    rng: &mut (impl Rng + Send),
     path: Option<impl AsRef<Path>>,
 ) -> Snark
 where
@@ -192,9 +183,12 @@ where
     >,
 {
     if let Some(path) = &path {
+        #[cfg(feature = "halo2-axiom")]
         if let Ok(snark) = read_snark(path) {
             return snark;
         }
+        #[cfg(not(feature = "halo2-axiom"))]
+        unimplemented!("Reading SNARKs is not supported in halo2-pse because we cannot derive Serialize/Deserialize for halo2curves field elements.");
     }
     let protocol = compile(
         params,
@@ -205,10 +199,10 @@ where
     );
 
     let instances = circuit.instances();
-    let proof =
-        gen_proof::<ConcreteCircuit, P, V>(params, pk, circuit, instances.clone(), rng, None);
+    let proof = gen_proof::<ConcreteCircuit, P, V>(params, pk, circuit, instances.clone(), None);
 
     let snark = Snark::new(protocol, instances, proof);
+    #[cfg(feature = "halo2-axiom")]
     if let Some(path) = &path {
         let f = File::create(path).unwrap();
         #[cfg(feature = "display")]
@@ -228,10 +222,9 @@ pub fn gen_snark_gwc<ConcreteCircuit: CircuitExt<Fr>>(
     params: &ParamsKZG<Bn256>,
     pk: &ProvingKey<G1Affine>,
     circuit: ConcreteCircuit,
-    rng: &mut (impl Rng + Send),
     path: Option<impl AsRef<Path>>,
 ) -> Snark {
-    gen_snark::<ConcreteCircuit, ProverGWC<_>, VerifierGWC<_>>(params, pk, circuit, rng, path)
+    gen_snark::<ConcreteCircuit, ProverGWC<_>, VerifierGWC<_>>(params, pk, circuit, path)
 }
 
 /// Generates a SNARK using SHPLONK multi-open scheme. Uses Poseidon for Fiat-Shamir.
@@ -242,17 +235,15 @@ pub fn gen_snark_shplonk<ConcreteCircuit: CircuitExt<Fr>>(
     params: &ParamsKZG<Bn256>,
     pk: &ProvingKey<G1Affine>,
     circuit: ConcreteCircuit,
-    rng: &mut (impl Rng + Send),
     path: Option<impl AsRef<Path>>,
 ) -> Snark {
-    gen_snark::<ConcreteCircuit, ProverSHPLONK<_>, VerifierSHPLONK<_>>(
-        params, pk, circuit, rng, path,
-    )
+    gen_snark::<ConcreteCircuit, ProverSHPLONK<_>, VerifierSHPLONK<_>>(params, pk, circuit, path)
 }
 
 /// Tries to deserialize a SNARK from the specified `path` using `bincode`.
 ///
 /// WARNING: The user must keep track of whether the SNARK was generated using the GWC or SHPLONK multi-open scheme.
+#[cfg(feature = "halo2-axiom")]
 pub fn read_snark(path: impl AsRef<Path>) -> Result<Snark, bincode::Error> {
     let f = File::open(path).map_err(Box::<bincode::ErrorKind>::from)?;
     bincode::deserialize_from(f)

@@ -1,4 +1,3 @@
-use crate::halo2_proofs::circuit;
 use crate::{util::arithmetic::CurveAffine, Protocol};
 use std::rc::Rc;
 
@@ -9,7 +8,7 @@ mod shim;
 pub(crate) mod test;
 
 pub use loader::{EcPoint, Halo2Loader, Scalar};
-pub use shim::{Context, EccInstructions, IntegerInstructions};
+pub use shim::{EccInstructions, IntegerInstructions};
 pub use util::Valuetools;
 
 pub use halo2_ecc;
@@ -36,19 +35,19 @@ impl<C> Protocol<C>
 where
     C: CurveAffine,
 {
-    pub fn loaded_preprocessed_as_witness<'a, EccChip: EccInstructions<'a, C>>(
+    pub fn loaded_preprocessed_as_witness<EccChip: EccInstructions<C>>(
         &self,
-        loader: &Rc<Halo2Loader<'a, C, EccChip>>,
-    ) -> Protocol<C, Rc<Halo2Loader<'a, C, EccChip>>> {
+        loader: &Rc<Halo2Loader<C, EccChip>>,
+    ) -> Protocol<C, Rc<Halo2Loader<C, EccChip>>> {
         let preprocessed = self
             .preprocessed
             .iter()
-            .map(|preprocessed| loader.assign_ec_point(circuit::Value::known(*preprocessed)))
+            .map(|preprocessed| loader.assign_ec_point(*preprocessed))
             .collect();
-        let transcript_initial_state =
-            self.transcript_initial_state.as_ref().map(|transcript_initial_state| {
-                loader.assign_scalar(circuit::Value::known(*transcript_initial_state))
-            });
+        let transcript_initial_state = self
+            .transcript_initial_state
+            .as_ref()
+            .map(|transcript_initial_state| loader.assign_scalar(*transcript_initial_state));
         Protocol {
             domain: self.domain.clone(),
             preprocessed,

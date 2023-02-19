@@ -1,3 +1,4 @@
+// this module is outdated and turned off! see examples instead
 #![allow(dead_code)]
 #![allow(clippy::all)]
 use crate::halo2_proofs::{
