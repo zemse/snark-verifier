@@ -6,10 +6,10 @@ use halo2_base::gates::flex_gate::GateStrategy;
 use halo2_base::utils::fs::gen_srs;
 use halo2_base::{gates::builder::FlexGateConfigParams, halo2_proofs};
 use halo2_proofs::{
-    circuit::{Layouter, SimpleFloorPlanner, Value},
+    circuit::{Layouter, SimpleFloorPlanner},
     dev::MockProver,
     halo2curves::{
-        bn256::{Bn256, Fq, Fr, G1Affine},
+        bn256::{Bn256, Fr, G1Affine},
         group::ff::Field,
         FieldExt,
     },
@@ -49,10 +49,11 @@ use crate::recursion::AggregationConfigParams;
 
 const LIMBS: usize = 3;
 const BITS: usize = 88;
-const T: usize = 5;
-const RATE: usize = 4;
+const T: usize = 3;
+const RATE: usize = 2;
 const R_F: usize = 8;
-const R_P: usize = 60;
+const R_P: usize = 57;
+const SECURE_MDS: usize = 0;
 
 type Pcs = Kzg<Bn256, Gwc19>;
 type Svk = KzgSuccinctVerifyingKey<G1Affine>;
@@ -71,7 +72,8 @@ mod common {
         loader: &L,
         inputs: &[L::LoadedScalar],
     ) -> L::LoadedScalar {
-        let mut hasher = Poseidon::new(loader, R_F, R_P);
+        // warning: generating a new spec is time intensive, use lazy_static in production
+        let mut hasher = Poseidon::new::<R_F, R_P, SECURE_MDS>(loader);
         hasher.update(inputs);
         hasher.squeeze()
     }
@@ -127,7 +129,8 @@ mod common {
 
         let instances = instances.iter().map(Vec::as_slice).collect_vec();
         let proof = {
-            let mut transcript = PoseidonTranscript::<NativeLoader, _>::new(Vec::new());
+            let mut transcript =
+                PoseidonTranscript::<NativeLoader, _>::new::<SECURE_MDS>(Vec::new());
             create_proof::<_, ProverGWC<_>, _, _, _, _>(
                 params,
                 pk,
@@ -141,7 +144,8 @@ mod common {
         };
 
         let accept = {
-            let mut transcript = PoseidonTranscript::<NativeLoader, _>::new(proof.as_slice());
+            let mut transcript =
+                PoseidonTranscript::<NativeLoader, _>::new::<SECURE_MDS>(proof.as_slice());
             VerificationStrategy::<_, VerifierGWC<_>>::finalize(
                 verify_proof::<_, VerifierGWC<_>, _, _, _>(
                     params.verifier_params(),
@@ -230,7 +234,8 @@ mod common {
             .map(|n| iter::repeat_with(|| Fr::random(OsRng)).take(n).collect())
             .collect();
         let proof = {
-            let mut transcript = PoseidonTranscript::<NativeLoader, _>::new(Vec::new());
+            let mut transcript =
+                PoseidonTranscript::<NativeLoader, _>::new::<SECURE_MDS>(Vec::new());
             for _ in 0..protocol
                 .num_witness
                 .iter()
@@ -311,7 +316,7 @@ mod application {
 }
 
 mod recursion {
-    use std::{collections::HashMap, env::var, fs::File};
+    use std::{collections::HashMap, env::var};
 
     use halo2_base::{
         gates::{
@@ -319,11 +324,9 @@ mod recursion {
             range::RangeConfig,
             GateInstructions, RangeChip, RangeInstructions,
         },
-        halo2_proofs::poly::commitment::Params,
-        AssignedValue, Context,
-        QuantumCell::Existing,
+        AssignedValue,
     };
-    use halo2_ecc::{bn254::FpChip, ecc::EccChip, fields::fp::FpConfig};
+    use halo2_ecc::bn254::FpChip;
     use halo2_proofs::plonk::{Column, Instance};
     use snark_verifier::loader::halo2::{EccInstructions, IntegerInstructions};
 
@@ -372,7 +375,8 @@ mod recursion {
                 instances.iter().map(|instance| loader.assign_scalar(*instance)).collect_vec()
             })
             .collect_vec();
-        let mut transcript = PoseidonTranscript::<Rc<Halo2Loader>, _>::new(loader, snark.proof());
+        let mut transcript =
+            PoseidonTranscript::<Rc<Halo2Loader>, _>::new::<SECURE_MDS>(loader, snark.proof());
         let proof = Plonk::read_proof(svk, &protocol, &instances, &mut transcript);
         let accumulators = Plonk::succinct_verify(svk, &protocol, &instances, &proof);
 
@@ -413,7 +417,8 @@ mod recursion {
         accumulators: Vec<KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>>,
         as_proof: &[u8],
     ) -> KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>> {
-        let mut transcript = PoseidonTranscript::<Rc<Halo2Loader>, _>::new(loader, as_proof);
+        let mut transcript =
+            PoseidonTranscript::<Rc<Halo2Loader>, _>::new::<SECURE_MDS>(loader, as_proof);
         let proof = As::read_proof(&Default::default(), &accumulators, &mut transcript).unwrap();
         As::verify(&Default::default(), &accumulators, &proof).unwrap()
     }
@@ -465,8 +470,9 @@ mod recursion {
             let default_accumulator = KzgAccumulator::new(params.get_g()[1], params.get_g()[0]);
 
             let succinct_verify = |snark: &Snark| {
-                let mut transcript =
-                    PoseidonTranscript::<NativeLoader, _>::new(snark.proof.as_slice());
+                let mut transcript = PoseidonTranscript::<NativeLoader, _>::new::<SECURE_MDS>(
+                    snark.proof.as_slice(),
+                );
                 let proof =
                     Plonk::read_proof(&svk, &snark.protocol, &snark.instances, &mut transcript);
                 Plonk::succinct_verify(&svk, &snark.protocol, &snark.instances, &proof)
@@ -481,7 +487,8 @@ mod recursion {
                 .collect_vec();
 
             let (accumulator, as_proof) = {
-                let mut transcript = PoseidonTranscript::<NativeLoader, _>::new(Vec::new());
+                let mut transcript =
+                    PoseidonTranscript::<NativeLoader, _>::new::<SECURE_MDS>(Vec::new());
                 let accumulator =
                     As::create_proof(&Default::default(), &accumulators, &mut transcript, OsRng)
                         .unwrap();
@@ -822,7 +829,8 @@ fn main() {
     let accept = {
         let svk = recursion_params.get_g()[0].into();
         let dk = (recursion_params.g2(), recursion_params.s_g2()).into();
-        let mut transcript = PoseidonTranscript::<NativeLoader, _>::new(snark.proof.as_slice());
+        let mut transcript =
+            PoseidonTranscript::<NativeLoader, _>::new::<SECURE_MDS>(snark.proof.as_slice());
         let proof = Plonk::read_proof(&svk, &snark.protocol, &snark.instances, &mut transcript);
         Plonk::verify(&svk, &dk, &snark.protocol, &snark.instances, &proof)
     };

@@ -7,7 +7,7 @@ use crate::{
     },
     util::{
         arithmetic::{fe_to_fe, CurveAffine, PrimeField},
-        hash::Poseidon,
+        hash::{OptimizedPoseidonSpec, Poseidon},
         transcript::{Transcript, TranscriptRead, TranscriptWrite},
         Itertools,
     },
@@ -55,15 +55,15 @@ where
     R: Read,
     EccChip: NativeEncoding<C>,
 {
-    pub fn new(loader: &Rc<Halo2Loader<C, EccChip>>, stream: R) -> Self {
-        let buf = Poseidon::new(loader, R_F, R_P);
+    pub fn new<const SECURE_MDS: usize>(loader: &Rc<Halo2Loader<C, EccChip>>, stream: R) -> Self {
+        let buf = Poseidon::new::<R_F, R_P, SECURE_MDS>(loader);
         Self { loader: loader.clone(), stream, buf }
     }
 
     pub fn from_spec(
         loader: &Rc<Halo2Loader<C, EccChip>>,
         stream: R,
-        spec: crate::poseidon::Spec<C::Scalar, T, RATE>,
+        spec: OptimizedPoseidonSpec<C::Scalar, T, RATE>,
     ) -> Self {
         let buf = Poseidon::from_spec(loader, spec);
         Self { loader: loader.clone(), stream, buf }
@@ -152,11 +152,15 @@ where
 impl<C: CurveAffine, S, const T: usize, const RATE: usize, const R_F: usize, const R_P: usize>
     PoseidonTranscript<C, NativeLoader, S, T, RATE, R_F, R_P>
 {
-    pub fn new(stream: S) -> Self {
-        Self { loader: NativeLoader, stream, buf: Poseidon::new(&NativeLoader, R_F, R_P) }
+    pub fn new<const SECURE_MDS: usize>(stream: S) -> Self {
+        Self {
+            loader: NativeLoader,
+            stream,
+            buf: Poseidon::new::<R_F, R_P, SECURE_MDS>(&NativeLoader),
+        }
     }
 
-    pub fn from_spec(stream: S, spec: crate::poseidon::Spec<C::Scalar, T, RATE>) -> Self {
+    pub fn from_spec(stream: S, spec: OptimizedPoseidonSpec<C::Scalar, T, RATE>) -> Self {
         Self { loader: NativeLoader, stream, buf: Poseidon::from_spec(&NativeLoader, spec) }
     }
 
@@ -352,7 +356,7 @@ where
     R: Read,
 {
     fn init(reader: R) -> Self {
-        Self::new(reader)
+        Self::new::<0>(reader)
     }
 }
 
@@ -386,7 +390,7 @@ where
     W: Write,
 {
     fn init(writer: W) -> Self {
-        Self::new(writer)
+        Self::new::<0>(writer)
     }
 
     fn finalize(self) -> W {

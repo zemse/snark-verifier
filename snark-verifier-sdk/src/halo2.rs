@@ -26,6 +26,7 @@ use halo2_proofs::{
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use rand::{rngs::StdRng, SeedableRng};
+pub use snark_verifier::util::hash::OptimizedPoseidonSpec;
 use snark_verifier::{
     cost::CostEstimation,
     loader::native::NativeLoader,
@@ -33,7 +34,6 @@ use snark_verifier::{
     system::halo2::{compile, Config},
     util::transcript::TranscriptWrite,
     verifier::PlonkProof,
-    PoseidonSpec,
 };
 use std::{
     fs::{self, File},
@@ -44,10 +44,13 @@ use std::{
 pub mod aggregation;
 
 // Poseidon parameters
-const T: usize = 5;
-const RATE: usize = 4;
-const R_F: usize = 8;
-const R_P: usize = 60;
+// We use the same ones Scroll uses for security: https://github.com/scroll-tech/poseidon-circuit/blob/714f50c7572a4ff6f2b1fa51a9604a99cd7b6c71/src/poseidon/primitives/bn256/fp.rs
+// Verify generated constants: https://github.com/scroll-tech/poseidon-circuit/blob/714f50c7572a4ff6f2b1fa51a9604a99cd7b6c71/src/poseidon/primitives/bn256/mod.rs#L65
+const T: usize = 3;
+const RATE: usize = 2;
+const R_F: usize = 8; // https://github.com/scroll-tech/poseidon-circuit/blob/714f50c7572a4ff6f2b1fa51a9604a99cd7b6c71/src/poseidon/primitives/p128pow5t3.rs#L26
+const R_P: usize = 57; // https://github.com/scroll-tech/poseidon-circuit/blob/714f50c7572a4ff6f2b1fa51a9604a99cd7b6c71/src/poseidon/primitives/bn256/mod.rs#L8
+const SECURE_MDS: usize = 0;
 
 pub type PoseidonTranscript<L, S> =
     snark_verifier::system::halo2::transcript::halo2::PoseidonTranscript<
@@ -61,7 +64,8 @@ pub type PoseidonTranscript<L, S> =
     >;
 
 lazy_static! {
-    pub static ref POSEIDON_SPEC: PoseidonSpec<Fr, T, RATE> = PoseidonSpec::new(R_F, R_P);
+    pub static ref POSEIDON_SPEC: OptimizedPoseidonSpec<Fr, T, RATE> =
+        OptimizedPoseidonSpec::new::<R_F, R_P, SECURE_MDS>();
 }
 
 /// Generates a native proof using either SHPLONK or GWC proving method. Uses Poseidon for Fiat-Shamir.
@@ -120,7 +124,8 @@ where
     }
 
     debug_assert!({
-        let mut transcript_read = PoseidonTranscript::<NativeLoader, &[u8]>::new(proof.as_slice());
+        let mut transcript_read =
+            PoseidonTranscript::<NativeLoader, &[u8]>::new::<SECURE_MDS>(proof.as_slice());
         VerificationStrategy::<_, V>::finalize(
             verify_proof::<_, V, _, _, _>(
                 params.verifier_params(),
@@ -249,6 +254,7 @@ pub fn read_snark(path: impl AsRef<Path>) -> Result<Snark, bincode::Error> {
     bincode::deserialize_from(f)
 }
 
+// copied from snark_verifier --example recursion
 pub fn gen_dummy_snark<ConcreteCircuit, MOS>(
     params: &ParamsKZG<Bn256>,
     vk: Option<&VerifyingKey<G1Affine>>,
@@ -305,7 +311,7 @@ where
     );
     let instances = num_instance.into_iter().map(|n| vec![Fr::default(); n]).collect();
     let proof = {
-        let mut transcript = PoseidonTranscript::<NativeLoader, _>::new(Vec::new());
+        let mut transcript = PoseidonTranscript::<NativeLoader, _>::new::<SECURE_MDS>(Vec::new());
         for _ in 0..protocol
             .num_witness
             .iter()

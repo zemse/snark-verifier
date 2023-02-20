@@ -230,10 +230,11 @@ mod aggregation {
     };
     use std::{collections::HashMap, rc::Rc};
 
-    const T: usize = 5;
-    const RATE: usize = 4;
+    const T: usize = 3;
+    const RATE: usize = 2;
     const R_F: usize = 8;
-    const R_P: usize = 60;
+    const R_P: usize = 57;
+    const SECURE_MDS: usize = 0;
 
     type Svk = KzgSuccinctVerifyingKey<G1Affine>;
     type BaseFieldEccChip<'chip> = halo2_ecc::ecc::BaseFieldEccChip<'chip, G1Affine>;
@@ -281,20 +282,16 @@ mod aggregation {
                 let protocol = snark.protocol.loaded(loader);
                 let instances = assign_instances(&snark.instances);
                 let mut transcript =
-                    PoseidonTranscript::<Rc<Halo2Loader>, _>::new(loader, snark.proof());
+                    PoseidonTranscript::<Rc<Halo2Loader>, _>::new::<0>(loader, snark.proof());
                 let proof = Plonk::read_proof(svk, &protocol, &instances, &mut transcript);
                 Plonk::succinct_verify(svk, &protocol, &instances, &proof)
             })
             .collect_vec();
 
-        let acccumulator = {
-            let mut transcript = PoseidonTranscript::<Rc<Halo2Loader>, _>::new(loader, as_proof);
-            let proof =
-                As::read_proof(&Default::default(), &accumulators, &mut transcript).unwrap();
-            As::verify(&Default::default(), &accumulators, &proof).unwrap()
-        };
-
-        acccumulator
+        let mut transcript =
+            PoseidonTranscript::<Rc<Halo2Loader>, _>::new::<SECURE_MDS>(loader, as_proof);
+        let proof = As::read_proof(&Default::default(), &accumulators, &mut transcript).unwrap();
+        As::verify(&Default::default(), &accumulators, &proof).unwrap()
     }
 
     #[derive(serde::Serialize, serde::Deserialize)]
@@ -334,8 +331,9 @@ mod aggregation {
             let accumulators = snarks
                 .iter()
                 .flat_map(|snark| {
-                    let mut transcript =
-                        PoseidonTranscript::<NativeLoader, _>::new(snark.proof.as_slice());
+                    let mut transcript = PoseidonTranscript::<NativeLoader, _>::new::<SECURE_MDS>(
+                        snark.proof.as_slice(),
+                    );
                     let proof =
                         Plonk::read_proof(&svk, &snark.protocol, &snark.instances, &mut transcript);
                     Plonk::succinct_verify(&svk, &snark.protocol, &snark.instances, &proof)
@@ -343,7 +341,8 @@ mod aggregation {
                 .collect_vec();
 
             let (_accumulator, as_proof) = {
-                let mut transcript = PoseidonTranscript::<NativeLoader, _>::new(Vec::new());
+                let mut transcript =
+                    PoseidonTranscript::<NativeLoader, _>::new::<SECURE_MDS>(Vec::new());
                 let accumulator =
                     As::create_proof(&Default::default(), &accumulators, &mut transcript, OsRng)
                         .unwrap();
@@ -404,10 +403,6 @@ mod aggregation {
 
         pub fn break_points(&self) -> MultiPhaseThreadBreakPoints {
             self.circuit.0.break_points.borrow().clone()
-        }
-
-        pub fn as_proof(&self) -> &[u8] {
-            &self.as_proof[..]
         }
 
         pub fn num_instance() -> Vec<usize> {
