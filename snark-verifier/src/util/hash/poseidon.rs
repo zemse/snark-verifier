@@ -206,13 +206,13 @@ impl<F: FieldExt, const T: usize, const RATE: usize> MDSMatrix<F, T, RATE> {
         // we avoid computing m_hat^{-1} explicitly by using Cramer's rule: https://en.wikipedia.org/wiki/Cramer%27s_rule
         let mut w_hat = [F::zero(); RATE];
         let det = Self::determinant(m_hat);
+        let det_inv = Option::<F>::from(det.invert()).expect("matrix is not invertible");
         for j in 0..RATE {
             let mut m_hat_j = m_hat;
             for i in 0..RATE {
                 m_hat_j[i][j] = w[i];
             }
-            w_hat[j] = Self::determinant(m_hat_j)
-                * Option::<F>::from(det.invert()).expect("matrix is not invertible");
+            w_hat[j] = Self::determinant(m_hat_j) * det_inv;
         }
         let m_prime = prime(m_hat);
         let m_prime_prime = prime_prime(w_hat);
