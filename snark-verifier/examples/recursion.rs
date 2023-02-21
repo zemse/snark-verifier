@@ -32,7 +32,7 @@ use rand_chacha::rand_core::OsRng;
 use snark_verifier::{
     loader::{self, native::NativeLoader, Loader, ScalarLoader},
     pcs::{
-        kzg::{Gwc19, Kzg, KzgAccumulator, KzgAs, KzgSuccinctVerifyingKey, LimbsEncoding},
+        kzg::{Gwc19, KzgAccumulator, KzgAs, KzgSuccinctVerifyingKey, LimbsEncoding},
         AccumulationScheme, AccumulationSchemeProver,
     },
     system::halo2::{self, compile, Config},
@@ -40,8 +40,11 @@ use snark_verifier::{
         arithmetic::{fe_to_fe, fe_to_limbs},
         hash,
     },
-    verifier::{self, PlonkProof, PlonkVerifier},
-    Protocol,
+    verifier::{
+        self,
+        plonk::{PlonkProof, PlonkProtocol},
+        SnarkVerifier,
+    },
 };
 use std::{env::set_var, fs, iter, marker::PhantomData, rc::Rc};
 
@@ -55,10 +58,10 @@ const R_F: usize = 8;
 const R_P: usize = 57;
 const SECURE_MDS: usize = 0;
 
-type Pcs = Kzg<Bn256, Gwc19>;
 type Svk = KzgSuccinctVerifyingKey<G1Affine>;
-type As = KzgAs<Pcs>;
-type Plonk = verifier::Plonk<Pcs, LimbsEncoding<LIMBS, BITS>>;
+type As = KzgAs<Bn256, Gwc19>;
+type PlonkVerifier = verifier::plonk::PlonkVerifier<As, LimbsEncoding<LIMBS, BITS>>;
+type PlonkSuccinctVerifier = verifier::plonk::PlonkSuccinctVerifier<As, LimbsEncoding<LIMBS, BITS>>;
 type Poseidon<L> = hash::Poseidon<Fr, L, T, RATE>;
 type PoseidonTranscript<L, S> =
     halo2::transcript::halo2::PoseidonTranscript<G1Affine, L, S, T, RATE, R_F, R_P>;
@@ -80,13 +83,17 @@ mod common {
 
     #[derive(Clone)]
     pub struct Snark {
-        pub protocol: Protocol<G1Affine>,
+        pub protocol: PlonkProtocol<G1Affine>,
         pub instances: Vec<Vec<Fr>>,
         pub proof: Vec<u8>,
     }
 
     impl Snark {
-        pub fn new(protocol: Protocol<G1Affine>, instances: Vec<Vec<Fr>>, proof: Vec<u8>) -> Self {
+        pub fn new(
+            protocol: PlonkProtocol<G1Affine>,
+            instances: Vec<Vec<Fr>>,
+            proof: Vec<u8>,
+        ) -> Self {
             Self { protocol, instances, proof }
         }
 
@@ -247,8 +254,8 @@ mod common {
             for _ in 0..protocol.evaluations.len() {
                 transcript.write_scalar(Fr::random(OsRng)).unwrap();
             }
-            let queries = PlonkProof::<G1Affine, NativeLoader, Pcs>::empty_queries(&protocol);
-            for _ in 0..Pcs::estimate_cost(&queries).num_commitment {
+            let queries = PlonkProof::<G1Affine, NativeLoader, As>::empty_queries(&protocol);
+            for _ in 0..As::estimate_cost(&queries).num_commitment {
                 transcript.write_ec_point(G1Affine::random(OsRng)).unwrap();
             }
             transcript.finalize()
@@ -377,8 +384,10 @@ mod recursion {
             .collect_vec();
         let mut transcript =
             PoseidonTranscript::<Rc<Halo2Loader>, _>::new::<SECURE_MDS>(loader, snark.proof());
-        let proof = Plonk::read_proof(svk, &protocol, &instances, &mut transcript);
-        let accumulators = Plonk::succinct_verify(svk, &protocol, &instances, &proof);
+        let proof =
+            PlonkSuccinctVerifier::read_proof(svk, &protocol, &instances, &mut transcript).unwrap();
+        let accumulators =
+            PlonkSuccinctVerifier::verify(svk, &protocol, &instances, &proof).unwrap();
 
         (
             instances
@@ -473,9 +482,15 @@ mod recursion {
                 let mut transcript = PoseidonTranscript::<NativeLoader, _>::new::<SECURE_MDS>(
                     snark.proof.as_slice(),
                 );
-                let proof =
-                    Plonk::read_proof(&svk, &snark.protocol, &snark.instances, &mut transcript);
-                Plonk::succinct_verify(&svk, &snark.protocol, &snark.instances, &proof)
+                let proof = PlonkSuccinctVerifier::read_proof(
+                    &svk,
+                    &snark.protocol,
+                    &snark.instances,
+                    &mut transcript,
+                )
+                .unwrap();
+                PlonkSuccinctVerifier::verify(&svk, &snark.protocol, &snark.instances, &proof)
+                    .unwrap()
             };
 
             let accumulators = iter::empty()
@@ -826,13 +841,14 @@ fn main() {
     end_timer!(pf_time);
     assert_eq!(final_state, Fr::from(2u64).pow(&[1 << num_round, 0, 0, 0]));
 
-    let accept = {
-        let svk = recursion_params.get_g()[0].into();
-        let dk = (recursion_params.g2(), recursion_params.s_g2()).into();
+    {
+        let dk =
+            (recursion_params.get_g()[0], recursion_params.g2(), recursion_params.s_g2()).into();
         let mut transcript =
             PoseidonTranscript::<NativeLoader, _>::new::<SECURE_MDS>(snark.proof.as_slice());
-        let proof = Plonk::read_proof(&svk, &snark.protocol, &snark.instances, &mut transcript);
-        Plonk::verify(&svk, &dk, &snark.protocol, &snark.instances, &proof)
+        let proof =
+            PlonkVerifier::read_proof(&dk, &snark.protocol, &snark.instances, &mut transcript)
+                .unwrap();
+        PlonkVerifier::verify(&dk, &snark.protocol, &snark.instances, &proof).unwrap()
     };
-    assert!(accept)
 }

@@ -1,13 +1,16 @@
 use crate::{loader::Loader, util::arithmetic::CurveAffine};
 use std::fmt::Debug;
 
+/// KZG accumulator, containing lhs G1 and rhs G1 of pairing.
 #[derive(Clone, Debug)]
 pub struct KzgAccumulator<C, L>
 where
     C: CurveAffine,
     L: Loader<C>,
 {
+    /// Left-hand side G1 of pairing.
     pub lhs: L::LoadedEcPoint,
+    /// Right-hand side G1 of pairing.
     pub rhs: L::LoadedEcPoint,
 }
 
@@ -16,6 +19,7 @@ where
     C: CurveAffine,
     L: Loader<C>,
 {
+    /// Initialize a [`KzgAccumulator`].
     pub fn new(lhs: L::LoadedEcPoint, rhs: L::LoadedEcPoint) -> Self {
         Self { lhs, rhs }
     }
@@ -34,7 +38,7 @@ mod native {
         loader::native::NativeLoader,
         pcs::{
             kzg::{KzgAccumulator, LimbsEncoding},
-            AccumulatorEncoding, PolynomialCommitmentScheme,
+            AccumulatorEncoding,
         },
         util::{
             arithmetic::{fe_from_limbs, CurveAffine},
@@ -43,17 +47,14 @@ mod native {
         Error,
     };
 
-    impl<C, PCS, const LIMBS: usize, const BITS: usize> AccumulatorEncoding<C, NativeLoader, PCS>
+    impl<C, const LIMBS: usize, const BITS: usize> AccumulatorEncoding<C, NativeLoader>
         for LimbsEncoding<LIMBS, BITS>
     where
         C: CurveAffine,
-        PCS: PolynomialCommitmentScheme<
-            C,
-            NativeLoader,
-            Accumulator = KzgAccumulator<C, NativeLoader>,
-        >,
     {
-        fn from_repr(limbs: &[&C::Scalar]) -> Result<PCS::Accumulator, Error> {
+        type Accumulator = KzgAccumulator<C, NativeLoader>;
+
+        fn from_repr(limbs: &[&C::Scalar]) -> Result<Self::Accumulator, Error> {
             assert_eq!(limbs.len(), 4 * LIMBS);
 
             let [lhs_x, lhs_y, rhs_x, rhs_y]: [_; 4] = limbs
@@ -61,7 +62,7 @@ mod native {
                 .into_iter()
                 .map(|limbs| {
                     fe_from_limbs::<_, _, LIMBS, BITS>(
-                        &limbs.iter().map(|limb| **limb).collect_vec(),
+                        limbs.iter().map(|limb| **limb).collect_vec().try_into().unwrap(),
                     )
                 })
                 .collect_vec()
@@ -83,7 +84,7 @@ mod evm {
         loader::evm::{EvmLoader, Scalar},
         pcs::{
             kzg::{KzgAccumulator, LimbsEncoding},
-            AccumulatorEncoding, PolynomialCommitmentScheme,
+            AccumulatorEncoding,
         },
         util::{
             arithmetic::{CurveAffine, PrimeField},
@@ -93,18 +94,15 @@ mod evm {
     };
     use std::rc::Rc;
 
-    impl<C, PCS, const LIMBS: usize, const BITS: usize> AccumulatorEncoding<C, Rc<EvmLoader>, PCS>
+    impl<C, const LIMBS: usize, const BITS: usize> AccumulatorEncoding<C, Rc<EvmLoader>>
         for LimbsEncoding<LIMBS, BITS>
     where
         C: CurveAffine,
         C::Scalar: PrimeField<Repr = [u8; 0x20]>,
-        PCS: PolynomialCommitmentScheme<
-            C,
-            Rc<EvmLoader>,
-            Accumulator = KzgAccumulator<C, Rc<EvmLoader>>,
-        >,
     {
-        fn from_repr(limbs: &[&Scalar]) -> Result<PCS::Accumulator, Error> {
+        type Accumulator = KzgAccumulator<C, Rc<EvmLoader>>;
+
+        fn from_repr(limbs: &[&Scalar]) -> Result<Self::Accumulator, Error> {
             assert_eq!(limbs.len(), 4 * LIMBS);
 
             let loader = limbs[0].loader();
@@ -135,7 +133,7 @@ mod halo2 {
         loader::halo2::{EccInstructions, Halo2Loader, Scalar},
         pcs::{
             kzg::{KzgAccumulator, LimbsEncoding},
-            AccumulatorEncoding, PolynomialCommitmentScheme,
+            AccumulatorEncoding,
         },
         util::{
             arithmetic::{fe_from_limbs, CurveAffine},
@@ -146,24 +144,31 @@ mod halo2 {
     use std::{iter, ops::Deref, rc::Rc};
 
     fn ec_point_from_limbs<C: CurveAffine, const LIMBS: usize, const BITS: usize>(
-        limbs: &[C::Scalar],
+        limbs: &[&C::Scalar],
     ) -> C {
         assert_eq!(limbs.len(), 2 * LIMBS);
 
-        let [x, y] = [&limbs[..LIMBS], &limbs[LIMBS..]].map(fe_from_limbs::<_, _, LIMBS, BITS>);
+        let [x, y] = [&limbs[..LIMBS], &limbs[LIMBS..]].map(|limbs| {
+            fe_from_limbs::<_, _, LIMBS, BITS>(
+                limbs.iter().map(|limb| **limb).collect_vec().try_into().unwrap(),
+            )
+        });
 
         C::from_xy(x, y).unwrap()
     }
 
+    /// Instructions to encode/decode a elliptic curve point into/from limbs.
     pub trait LimbsEncodingInstructions<C: CurveAffine, const LIMBS: usize, const BITS: usize>:
         EccInstructions<C>
     {
+        /// Decode and assign an elliptic curve point from limbs.
         fn assign_ec_point_from_limbs(
             &self,
             ctx: &mut Self::Context,
             limbs: &[impl Deref<Target = Self::AssignedScalar>],
         ) -> Self::AssignedEcPoint;
 
+        /// Encode an elliptic curve point into limbs.
         fn assign_ec_point_to_limbs(
             &self,
             ctx: &mut Self::Context,
@@ -171,18 +176,15 @@ mod halo2 {
         ) -> Vec<Self::AssignedCell>;
     }
 
-    impl<C, PCS, EccChip, const LIMBS: usize, const BITS: usize>
-        AccumulatorEncoding<C, Rc<Halo2Loader<C, EccChip>>, PCS> for LimbsEncoding<LIMBS, BITS>
+    impl<C, EccChip, const LIMBS: usize, const BITS: usize>
+        AccumulatorEncoding<C, Rc<Halo2Loader<C, EccChip>>> for LimbsEncoding<LIMBS, BITS>
     where
         C: CurveAffine,
-        PCS: PolynomialCommitmentScheme<
-            C,
-            Rc<Halo2Loader<C, EccChip>>,
-            Accumulator = KzgAccumulator<C, Rc<Halo2Loader<C, EccChip>>>,
-        >,
         EccChip: LimbsEncodingInstructions<C, LIMBS, BITS>,
     {
-        fn from_repr(limbs: &[&Scalar<C, EccChip>]) -> Result<PCS::Accumulator, Error> {
+        type Accumulator = KzgAccumulator<C, Rc<Halo2Loader<C, EccChip>>>;
+
+        fn from_repr(limbs: &[&Scalar<C, EccChip>]) -> Result<Self::Accumulator, Error> {
             assert_eq!(limbs.len(), 4 * LIMBS);
 
             let loader = limbs[0].loader();
@@ -221,7 +223,7 @@ mod halo2 {
                 let ec_point = self.assign_point::<C>(
                     ctx.main(0),
                     ec_point_from_limbs::<_, LIMBS, BITS>(
-                        &limbs.iter().map(|limb| *limb.value()).collect_vec(),
+                        &limbs.iter().map(|limb| limb.value()).collect_vec(),
                     ),
                 );
 

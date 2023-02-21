@@ -1,4 +1,4 @@
-use super::{read_instances, write_instances, CircuitExt, Plonk, Snark};
+use super::{read_instances, write_instances, CircuitExt, PlonkSuccinctVerifier, Snark};
 #[cfg(feature = "display")]
 use ark_std::{end_timer, start_timer};
 use halo2_base::halo2_proofs;
@@ -30,10 +30,13 @@ pub use snark_verifier::util::hash::OptimizedPoseidonSpec;
 use snark_verifier::{
     cost::CostEstimation,
     loader::native::NativeLoader,
-    pcs::{self, MultiOpenScheme},
+    pcs::{
+        kzg::{KzgAccumulator, KzgAsVerifyingKey, KzgSuccinctVerifyingKey},
+        AccumulationScheme, PolynomialCommitmentScheme, Query,
+    },
     system::halo2::{compile, Config},
     util::transcript::TranscriptWrite,
-    verifier::PlonkProof,
+    verifier::plonk::PlonkProof,
 };
 use std::{
     fs::{self, File},
@@ -255,15 +258,24 @@ pub fn read_snark(path: impl AsRef<Path>) -> Result<Snark, bincode::Error> {
 }
 
 // copied from snark_verifier --example recursion
-pub fn gen_dummy_snark<ConcreteCircuit, MOS>(
+pub fn gen_dummy_snark<ConcreteCircuit, AS>(
     params: &ParamsKZG<Bn256>,
     vk: Option<&VerifyingKey<G1Affine>>,
     num_instance: Vec<usize>,
 ) -> Snark
 where
     ConcreteCircuit: CircuitExt<Fr>,
-    MOS: MultiOpenScheme<G1Affine, NativeLoader>
-        + CostEstimation<G1Affine, Input = Vec<pcs::Query<Fr>>>,
+    AS: PolynomialCommitmentScheme<
+            G1Affine,
+            NativeLoader,
+            VerifyingKey = KzgSuccinctVerifyingKey<G1Affine>,
+            Output = KzgAccumulator<G1Affine, NativeLoader>,
+        > + AccumulationScheme<
+            G1Affine,
+            NativeLoader,
+            Accumulator = KzgAccumulator<G1Affine, NativeLoader>,
+            VerifyingKey = KzgAsVerifyingKey,
+        > + CostEstimation<G1Affine, Input = Vec<Query<Fr>>>,
 {
     struct CsProxy<F, C>(PhantomData<(F, C)>);
 
@@ -323,8 +335,8 @@ where
         for _ in 0..protocol.evaluations.len() {
             transcript.write_scalar(Fr::default()).unwrap();
         }
-        let queries = PlonkProof::<G1Affine, NativeLoader, MOS>::empty_queries(&protocol);
-        for _ in 0..MOS::estimate_cost(&queries).num_commitment {
+        let queries = PlonkProof::<G1Affine, NativeLoader, AS>::empty_queries(&protocol);
+        for _ in 0..AS::estimate_cost(&queries).num_commitment {
             transcript.write_ec_point(G1Affine::default()).unwrap();
         }
         transcript.finalize()

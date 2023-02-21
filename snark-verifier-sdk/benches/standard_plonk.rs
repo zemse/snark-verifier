@@ -4,7 +4,6 @@ use halo2_base::gates::builder::CircuitBuilderStage;
 use halo2_base::utils::fs::gen_srs;
 use pprof::criterion::{Output, PProfProfiler};
 use rand::rngs::OsRng;
-use std::env::set_var;
 
 use ark_std::{end_timer, start_timer};
 use halo2_base::halo2_proofs;

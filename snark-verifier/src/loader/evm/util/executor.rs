@@ -1,7 +1,8 @@
-//! Copied and modified from https://github.com/foundry-rs/foundry/blob/master/evm/src/executor/mod.rs
+//! Copied and modified from
+//! <https://github.com/foundry-rs/foundry/blob/master/evm/src/executor/mod.rs>
 
+use crate::loader::evm::{Address, H256, U256};
 use bytes::Bytes;
-use ethereum_types::{Address, H256, U256, U64};
 use revm::{
     evm_inner, opcode, spec_opcode_gas, Account, BlockEnv, CallInputs, CallScheme, CreateInputs,
     CreateScheme, Database, DatabaseCommit, EVMData, Env, ExecutionResult, Gas, GasInspector,
@@ -77,14 +78,6 @@ pub struct Log {
     pub address: Address,
     pub topics: Vec<H256>,
     pub data: Bytes,
-    pub block_hash: Option<H256>,
-    pub block_number: Option<U64>,
-    pub transaction_hash: Option<H256>,
-    pub transaction_index: Option<U64>,
-    pub log_index: Option<U256>,
-    pub transaction_log_index: Option<U256>,
-    pub log_type: Option<String>,
-    pub removed: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -98,7 +91,6 @@ impl<DB: Database> Inspector<DB> for LogCollector {
             address: *address,
             topics: topics.to_vec(),
             data: data.clone(),
-            ..Default::default()
         });
     }
 
@@ -425,7 +417,6 @@ impl<DB: Database> Inspector<DB> for Debugger {
     }
 }
 
-#[macro_export]
 macro_rules! call_inspectors {
     ($id:ident, [ $($inspector:expr),+ ], $call:block) => {
         $({
@@ -678,16 +669,28 @@ impl<DB: Database> Inspector<DB> for InspectorStack {
     }
 }
 
+/// Call result.
+#[derive(Debug)]
 pub struct RawCallResult {
+    /// Exit reason
     pub exit_reason: Return,
+    /// If the call is reverted or not.
     pub reverted: bool,
+    /// Returndata
     pub result: Bytes,
+    /// Gas used
     pub gas_used: u64,
+    /// Gas refunded
     pub gas_refunded: u64,
+    /// Logs emitted during the call
     pub logs: Vec<Log>,
+    /// Debug information if any
     pub debug: Option<DebugArena>,
+    /// State changes if any
     pub state_changeset: Option<HashMap<Address, Account>>,
+    /// Environment
     pub env: Env,
+    /// Output
     pub out: TransactOut,
 }
 
@@ -703,6 +706,7 @@ pub struct DeployResult {
     pub env: Env,
 }
 
+/// Executor builder.
 #[derive(Debug, Default)]
 pub struct ExecutorBuilder {
     debugger: bool,
@@ -710,16 +714,19 @@ pub struct ExecutorBuilder {
 }
 
 impl ExecutorBuilder {
+    /// Set `debugger`.
     pub fn set_debugger(mut self, enable: bool) -> Self {
         self.debugger = enable;
         self
     }
 
+    /// Set `gas_limit`.
     pub fn with_gas_limit(mut self, gas_limit: U256) -> Self {
         self.gas_limit = Some(gas_limit);
         self
     }
 
+    /// Initialize an `Executor`.
     pub fn build(self) -> Executor {
         Executor::new(self.debugger, self.gas_limit.unwrap_or(U256::MAX))
     }

@@ -1,11 +1,7 @@
-use crate::{util::arithmetic::CurveAffine, Protocol};
-use std::rc::Rc;
+//! `Loader` implementation for generating verifier in [`halo2_proofs`] circuit.
 
 pub(crate) mod loader;
 mod shim;
-
-#[cfg(test)]
-pub(crate) mod test;
 
 pub use loader::{EcPoint, Halo2Loader, Scalar};
 pub use shim::{EccInstructions, IntegerInstructions};
@@ -16,7 +12,10 @@ pub use halo2_ecc;
 mod util {
     use crate::halo2_proofs::circuit::Value;
 
+    /// Helper methods when dealing with iterator of [`Value`].
     pub trait Valuetools<V>: Iterator<Item = Value<V>> {
+        /// Fold zipped values into accumulator, returns `Value::unknown()` if
+        /// any is `Value::unknown()`.
         fn fold_zipped<B, F>(self, init: B, mut f: F) -> Value<B>
         where
             Self: Sized,
@@ -29,38 +28,4 @@ mod util {
     }
 
     impl<V, I: Iterator<Item = Value<V>>> Valuetools<V> for I {}
-}
-
-impl<C> Protocol<C>
-where
-    C: CurveAffine,
-{
-    pub fn loaded_preprocessed_as_witness<EccChip: EccInstructions<C>>(
-        &self,
-        loader: &Rc<Halo2Loader<C, EccChip>>,
-    ) -> Protocol<C, Rc<Halo2Loader<C, EccChip>>> {
-        let preprocessed = self
-            .preprocessed
-            .iter()
-            .map(|preprocessed| loader.assign_ec_point(*preprocessed))
-            .collect();
-        let transcript_initial_state = self
-            .transcript_initial_state
-            .as_ref()
-            .map(|transcript_initial_state| loader.assign_scalar(*transcript_initial_state));
-        Protocol {
-            domain: self.domain.clone(),
-            preprocessed,
-            num_instance: self.num_instance.clone(),
-            num_witness: self.num_witness.clone(),
-            num_challenge: self.num_challenge.clone(),
-            evaluations: self.evaluations.clone(),
-            queries: self.queries.clone(),
-            quotient: self.quotient.clone(),
-            transcript_initial_state,
-            instance_committing_key: self.instance_committing_key.clone(),
-            linearization: self.linearization,
-            accumulator_indices: self.accumulator_indices.clone(),
-        }
-    }
 }

@@ -1,3 +1,5 @@
+//! Transcript for verifier in [`halo2_proofs`] circuit.
+
 use crate::halo2_proofs;
 use crate::{
     loader::{
@@ -24,6 +26,7 @@ pub trait NativeEncoding<C>: EccInstructions<C>
 where
     C: CurveAffine,
 {
+    /// Encode.
     fn encode(
         &self,
         ctx: &mut Self::Context,
@@ -31,6 +34,10 @@ where
     ) -> Result<Vec<Self::AssignedScalar>, Error>;
 }
 
+#[derive(Debug)]
+/// Transcript for verifier in [`halo2_proofs`] circuit using poseidon hasher.
+/// Currently It assumes the elliptic curve scalar field is same as native
+/// field.
 pub struct PoseidonTranscript<
     C,
     L,
@@ -55,11 +62,14 @@ where
     R: Read,
     EccChip: NativeEncoding<C>,
 {
+    /// Initialize [`PoseidonTranscript`] given readable or writeable stream for
+    /// verifying or proving with [`NativeLoader`].
     pub fn new<const SECURE_MDS: usize>(loader: &Rc<Halo2Loader<C, EccChip>>, stream: R) -> Self {
         let buf = Poseidon::new::<R_F, R_P, SECURE_MDS>(loader);
         Self { loader: loader.clone(), stream, buf }
     }
 
+    /// Initialize [`PoseidonTranscript`] from a precomputed spec of round constants and MDS matrix because computing the constants is expensive.
     pub fn from_spec(
         loader: &Rc<Halo2Loader<C, EccChip>>,
         stream: R,
@@ -69,6 +79,7 @@ where
         Self { loader: loader.clone(), stream, buf }
     }
 
+    /// Clear the buffer and set the stream to a new one. Effectively the same as starting from a new transcript.
     pub fn new_stream(&mut self, stream: R) {
         self.buf.clear();
         self.stream = stream;
@@ -152,6 +163,8 @@ where
 impl<C: CurveAffine, S, const T: usize, const RATE: usize, const R_F: usize, const R_P: usize>
     PoseidonTranscript<C, NativeLoader, S, T, RATE, R_F, R_P>
 {
+    /// Initialize [`PoseidonTranscript`] given readable or writeable stream for
+    /// verifying or proving with [`NativeLoader`].
     pub fn new<const SECURE_MDS: usize>(stream: S) -> Self {
         Self {
             loader: NativeLoader,
@@ -160,10 +173,12 @@ impl<C: CurveAffine, S, const T: usize, const RATE: usize, const R_F: usize, con
         }
     }
 
+    /// Initialize [`PoseidonTranscript`] from a precomputed spec of round constants and MDS matrix because computing the constants is expensive.
     pub fn from_spec(stream: S, spec: OptimizedPoseidonSpec<C::Scalar, T, RATE>) -> Self {
         Self { loader: NativeLoader, stream, buf: Poseidon::from_spec(&NativeLoader, spec) }
     }
 
+    /// Clear the buffer and set the stream to a new one. Effectively the same as starting from a new transcript.
     pub fn new_stream(&mut self, stream: S) {
         self.buf.clear();
         self.stream = stream;
@@ -173,6 +188,7 @@ impl<C: CurveAffine, S, const T: usize, const RATE: usize, const R_F: usize, con
 impl<C: CurveAffine, const T: usize, const RATE: usize, const R_F: usize, const R_P: usize>
     PoseidonTranscript<C, NativeLoader, Vec<u8>, T, RATE, R_F, R_P>
 {
+    /// Clear the buffer and stream.
     pub fn clear(&mut self) {
         self.buf.clear();
         self.stream.clear();
@@ -250,10 +266,12 @@ where
     C: CurveAffine,
     W: Write,
 {
+    /// Returns mutable `stream`.
     pub fn stream_mut(&mut self) -> &mut W {
         &mut self.stream
     }
 
+    /// Finalize transcript and returns `stream`.
     pub fn finalize(self) -> W {
         self.stream
     }
@@ -285,6 +303,10 @@ where
     }
 }
 
+/// [`EncodedChallenge`] implemented for verifier in [`halo2_proofs`] circuit.
+/// Currently It assumes the elliptic curve scalar field is same as native
+/// field.
+#[derive(Debug)]
 pub struct ChallengeScalar<C: CurveAffine>(C::Scalar);
 
 impl<C: CurveAffine> EncodedChallenge<C> for ChallengeScalar<C> {

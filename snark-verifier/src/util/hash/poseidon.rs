@@ -226,6 +226,7 @@ impl<F: FieldExt, const T: usize, const RATE: usize> MDSMatrix<F, T, RATE> {
 }
 
 impl<F: FieldExt, const T: usize, const RATE: usize> OptimizedPoseidonSpec<F, T, RATE> {
+    /// Generate new spec with specific number of full and partial rounds. `SECURE_MDS` is usually 0, but may need to be specified because insecure matrices may sometimes be generated
     pub fn new<const R_F: usize, const R_P: usize, const SECURE_MDS: usize>() -> Self {
         let (round_constants, mds, mds_inv) =
             Poseidon128Pow5Gen::<F, T, RATE, R_F, R_P, SECURE_MDS>::constants();
@@ -318,7 +319,7 @@ impl<F: FieldExt, const T: usize, const RATE: usize> OptimizedPoseidonSpec<F, T,
 
 // now we get to actual trait based implementation of Poseidon permutation
 // this works for any loader, where the two loaders used are NativeLoader (native rust) and Halo2Loader (ZK circuit)
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct State<F: FieldExt, L, const T: usize, const RATE: usize> {
     inner: [L; T],
     _marker: PhantomData<F>,
@@ -408,6 +409,8 @@ impl<F: FieldExt, L: LoadedScalar<F>, const T: usize, const RATE: usize> State<F
     }
 }
 
+/// Poseidon hasher with configurable `RATE`.
+#[derive(Debug)]
 pub struct Poseidon<F: FieldExt, L, const T: usize, const RATE: usize> {
     spec: OptimizedPoseidonSpec<F, T, RATE>,
     default_state: State<F, L, T, RATE>,
@@ -416,6 +419,8 @@ pub struct Poseidon<F: FieldExt, L, const T: usize, const RATE: usize> {
 }
 
 impl<F: FieldExt, L: LoadedScalar<F>, const T: usize, const RATE: usize> Poseidon<F, L, T, RATE> {
+    /// Initialize a poseidon hasher.
+    /// Generates a new spec with specific number of full and partial rounds. `SECURE_MDS` is usually 0, but may need to be specified because insecure matrices may sometimes be generated
     pub fn new<const R_F: usize, const R_P: usize, const SECURE_MDS: usize>(
         loader: &L::Loader,
     ) -> Self {
@@ -428,20 +433,25 @@ impl<F: FieldExt, L: LoadedScalar<F>, const T: usize, const RATE: usize> Poseido
         }
     }
 
+    /// Initialize a poseidon hasher from an existing spec.
     pub fn from_spec(loader: &L::Loader, spec: OptimizedPoseidonSpec<F, T, RATE>) -> Self {
         let default_state = State::default(loader);
         Self { spec, state: default_state.clone(), default_state, buf: Vec::new() }
     }
 
+    /// Reset state to default and clear the buffer.
     pub fn clear(&mut self) {
         self.state = self.default_state.clone();
         self.buf.clear();
     }
 
+    /// Store given `elements` into buffer.
     pub fn update(&mut self, elements: &[L]) {
         self.buf.extend_from_slice(elements);
     }
 
+    /// Consume buffer and perform permutation, then output second element of
+    /// state.
     pub fn squeeze(&mut self) -> L {
         let buf = mem::take(&mut self.buf);
         let exact = buf.len() % RATE == 0;

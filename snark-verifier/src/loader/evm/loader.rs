@@ -2,7 +2,7 @@ use crate::{
     loader::{
         evm::{
             code::{Precompiled, YulCode},
-            fe_to_u256, modulus, u256_to_fe,
+            fe_to_u256, modulus, u256_to_fe, U256, U512,
         },
         EcPointLoader, LoadedEcPoint, LoadedScalar, Loader, ScalarLoader,
     },
@@ -11,7 +11,6 @@ use crate::{
         Itertools,
     },
 };
-use ethereum_types::{U256, U512};
 use hex;
 use std::{
     cell::RefCell,
@@ -39,15 +38,16 @@ impl<T: Debug> PartialEq for Value<T> {
 
 impl<T: Debug> Value<T> {
     fn identifier(&self) -> String {
-        match &self {
-            Value::Constant(_) | Value::Memory(_) => format!("{self:?}"),
-            Value::Negated(value) => format!("-({value:?})"),
-            Value::Sum(lhs, rhs) => format!("({lhs:?} + {rhs:?})"),
-            Value::Product(lhs, rhs) => format!("({lhs:?} * {rhs:?})"),
+        match self {
+            Value::Constant(_) | Value::Memory(_) => format!("{:?}", self),
+            Value::Negated(value) => format!("-({:?})", value),
+            Value::Sum(lhs, rhs) => format!("({:?} + {:?})", lhs, rhs),
+            Value::Product(lhs, rhs) => format!("({:?} * {:?})", lhs, rhs),
         }
     }
 }
 
+/// `Loader` implementation for generating yul code as EVM verifier.
 #[derive(Clone, Debug)]
 pub struct EvmLoader {
     base_modulus: U256,
@@ -66,6 +66,7 @@ fn hex_encode_u256(value: &U256) -> String {
 }
 
 impl EvmLoader {
+    /// Initialize a [`EvmLoader`] with base and scalar field.
     pub fn new<Base, Scalar>() -> Rc<Self>
     where
         Base: PrimeField<Repr = [u8; 0x20]>,
@@ -86,6 +87,7 @@ impl EvmLoader {
         })
     }
 
+    /// Returns generated yul code.
     pub fn yul_code(self: &Rc<Self>) -> String {
         let code = "
             if not(success) { revert(0, 0) }
@@ -97,6 +99,7 @@ impl EvmLoader {
             .code(hex_encode_u256(&self.base_modulus), hex_encode_u256(&self.scalar_modulus))
     }
 
+    /// Allocates memory chunk with given `size` and returns pointer.
     pub fn allocate(self: &Rc<Self>, size: usize) -> usize {
         let ptr = *self.ptr.borrow();
         *self.ptr.borrow_mut() += size;
@@ -136,6 +139,7 @@ impl EvmLoader {
         }
     }
 
+    /// Calldata load a field element.
     pub fn calldataload_scalar(self: &Rc<Self>, offset: usize) -> Scalar {
         let ptr = self.allocate(0x20);
         let code = format!("mstore({ptr:#x}, mod(calldataload({offset:#x}), f_q))");
@@ -143,6 +147,8 @@ impl EvmLoader {
         self.scalar(Value::Memory(ptr))
     }
 
+    /// Calldata load an elliptic curve point and validate it's on affine plane.
+    /// Note that identity will cause the verification to fail.
     pub fn calldataload_ec_point(self: &Rc<Self>, offset: usize) -> EcPoint {
         let x_ptr = self.allocate(0x40);
         let y_ptr = x_ptr + 0x20;
@@ -163,6 +169,7 @@ impl EvmLoader {
         self.ec_point(Value::Memory(x_ptr))
     }
 
+    /// Decode an elliptic curve point from limbs.
     pub fn ec_point_from_limbs<const LIMBS: usize, const BITS: usize>(
         self: &Rc<Self>,
         x_limbs: [&Scalar; LIMBS],
@@ -231,6 +238,8 @@ impl EvmLoader {
         EcPoint { loader: self.clone(), value }
     }
 
+    /// Performs `KECCAK256` on `memory[ptr..ptr+len]` and returns pointer of
+    /// hash.
     pub fn keccak256(self: &Rc<Self>, ptr: usize, len: usize) -> usize {
         let hash_ptr = self.allocate(0x20);
         let code = format!("mstore({hash_ptr:#x}, keccak256({ptr:#x}, {len}))");
@@ -238,17 +247,20 @@ impl EvmLoader {
         hash_ptr
     }
 
+    /// Copies a field element into given `ptr`.
     pub fn copy_scalar(self: &Rc<Self>, scalar: &Scalar, ptr: usize) {
         let scalar = self.push(scalar);
         self.code.borrow_mut().runtime_append(format!("mstore({ptr:#x}, {scalar})"));
     }
 
+    /// Allocates a new field element and copies the given value into it.
     pub fn dup_scalar(self: &Rc<Self>, scalar: &Scalar) -> Scalar {
         let ptr = self.allocate(0x20);
         self.copy_scalar(scalar, ptr);
         self.scalar(Value::Memory(ptr))
     }
 
+    /// Allocates a new elliptic curve point and copies the given value into it.
     pub fn dup_ec_point(self: &Rc<Self>, value: &EcPoint) -> EcPoint {
         let ptr = self.allocate(0x40);
         match value.value {
@@ -322,6 +334,7 @@ impl EvmLoader {
         self.ec_point(Value::Memory(rd_ptr))
     }
 
+    /// Performs pairing.
     pub fn pairing(
         self: &Rc<Self>,
         lhs: &EcPoint,
@@ -427,6 +440,7 @@ impl EvmLoader {
     }
 }
 
+/// Elliptic curve point.
 #[derive(Clone)]
 pub struct EcPoint {
     loader: Rc<EvmLoader>,
@@ -474,6 +488,7 @@ where
     }
 }
 
+/// Field element.
 #[derive(Clone)]
 pub struct Scalar {
     loader: Rc<EvmLoader>,

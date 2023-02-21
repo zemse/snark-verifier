@@ -1,5 +1,4 @@
-#![allow(clippy::clone_on_copy)]
-use super::Plonk;
+use super::PlonkSuccinctVerifier;
 use crate::{BITS, LIMBS};
 use halo2_base::{
     gates::{
@@ -32,11 +31,11 @@ use snark_verifier::{
         native::NativeLoader,
     },
     pcs::{
-        kzg::{KzgAccumulator, KzgAs, KzgSuccinctVerifyingKey},
-        AccumulationScheme, AccumulationSchemeProver, MultiOpenScheme, PolynomialCommitmentScheme,
+        kzg::{KzgAccumulator, KzgAsProvingKey, KzgAsVerifyingKey, KzgSuccinctVerifyingKey},
+        AccumulationScheme, AccumulationSchemeProver, PolynomialCommitmentScheme,
     },
     util::arithmetic::fe_to_limbs,
-    verifier::PlonkVerifier,
+    verifier::SnarkVerifier,
 };
 use std::{
     collections::HashMap,
@@ -52,31 +51,30 @@ pub type Svk = KzgSuccinctVerifyingKey<G1Affine>;
 pub type BaseFieldEccChip<'chip> = halo2_ecc::ecc::BaseFieldEccChip<'chip, G1Affine>;
 pub type Halo2Loader<'chip> = loader::halo2::Halo2Loader<G1Affine, BaseFieldEccChip<'chip>>;
 
-// It is hard to get all the traits to work with Shplonk and PlonkGwc so we'll just use an enum
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum KZGMultiOpenScheme {
-    SHPLONK,
-    GWC,
-}
-
 #[allow(clippy::type_complexity)]
 /// Core function used in `synthesize` to aggregate multiple `snarks`.
 ///  
 /// Returns the assigned instances of previous snarks and the new final pair that needs to be verified in a pairing check.
 /// For each previous snark, we concatenate all instances into a single vector. We return a vector of vectors,
 /// one vector per snark, for convenience.
-pub fn aggregate<'a, MOS>(
-    svk: &MOS::SuccinctVerifyingKey,
+pub fn aggregate<'a, AS>(
+    svk: &Svk,
     loader: &Rc<Halo2Loader<'a>>,
     snarks: &[Snark],
     as_proof: &[u8],
 ) -> (Vec<Vec<AssignedValue<Fr>>>, KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>)
 where
-    MOS: PolynomialCommitmentScheme<
+    AS: PolynomialCommitmentScheme<
+            G1Affine,
+            Rc<Halo2Loader<'a>>,
+            VerifyingKey = Svk,
+            Output = KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>,
+        > + AccumulationScheme<
             G1Affine,
             Rc<Halo2Loader<'a>>,
             Accumulator = KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>,
-        > + MultiOpenScheme<G1Affine, Rc<Halo2Loader<'a>>>,
+            VerifyingKey = KzgAsVerifyingKey,
+        >,
 {
     let assign_instances = |instances: &[Vec<Fr>]| {
         instances
@@ -104,8 +102,15 @@ where
             // read the transcript and perform Fiat-Shamir
             // run through verification computation and produce the final pair `succinct`
             transcript.new_stream(snark.proof());
-            let proof = Plonk::<MOS>::read_proof(svk, &protocol, &instances, &mut transcript);
-            let accumulator = Plonk::<MOS>::succinct_verify(svk, &protocol, &instances, &proof);
+            let proof = PlonkSuccinctVerifier::<AS>::read_proof(
+                svk,
+                &protocol,
+                &instances,
+                &mut transcript,
+            )
+            .unwrap();
+            let accumulator =
+                PlonkSuccinctVerifier::<AS>::verify(svk, &protocol, &instances, &proof).unwrap();
 
             previous_instances.push(
                 instances.into_iter().flatten().map(|scalar| scalar.into_assigned()).collect(),
@@ -117,9 +122,14 @@ where
 
     let accumulator = if accumulators.len() > 1 {
         transcript.new_stream(as_proof);
-        let proof =
-            KzgAs::<MOS>::read_proof(&Default::default(), &accumulators, &mut transcript).unwrap();
-        KzgAs::<MOS>::verify(&Default::default(), &accumulators, &proof).unwrap()
+        let proof = <AS as AccumulationScheme<_, _>>::read_proof(
+            &Default::default(),
+            &accumulators,
+            &mut transcript,
+        )
+        .unwrap();
+        <AS as AccumulationScheme<_, _>>::verify(&Default::default(), &accumulators, &proof)
+            .unwrap()
     } else {
         accumulators.pop().unwrap()
     };
@@ -127,7 +137,7 @@ where
     (previous_instances, accumulator)
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct AggregationConfigParams {
     pub degree: u32,
     pub num_advice: usize,
@@ -210,6 +220,29 @@ pub struct AggregationCircuit {
     pub as_proof: Vec<u8>, // not sure this needs to be stored, keeping for now
 }
 
+// trait just so we can have a generic that is either SHPLONK or GWC
+pub trait Halo2KzgAccumulationScheme<'a> = PolynomialCommitmentScheme<
+        G1Affine,
+        Rc<Halo2Loader<'a>>,
+        VerifyingKey = Svk,
+        Output = KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>,
+    > + AccumulationScheme<
+        G1Affine,
+        Rc<Halo2Loader<'a>>,
+        Accumulator = KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>,
+        VerifyingKey = KzgAsVerifyingKey,
+    > + PolynomialCommitmentScheme<
+        G1Affine,
+        NativeLoader,
+        VerifyingKey = Svk,
+        Output = KzgAccumulator<G1Affine, NativeLoader>,
+    > + AccumulationScheme<
+        G1Affine,
+        NativeLoader,
+        Accumulator = KzgAccumulator<G1Affine, NativeLoader>,
+        VerifyingKey = KzgAsVerifyingKey,
+    > + AccumulationSchemeProver<G1Affine, ProvingKey = KzgAsProvingKey<G1Affine>>;
+
 impl AggregationCircuit {
     /// Given snarks, this creates a circuit and runs the `GateThreadBuilder` to verify all the snarks.
     /// By default, the returned circuit has public instances equal to the limbs of the pair of elliptic curve points, referred to as the `accumulator`, that need to be verified in a final pairing check.
@@ -218,7 +251,7 @@ impl AggregationCircuit {
     ///
     /// Warning: will fail silently if `snarks` were created using a different multi-open scheme than `MOS`
     /// where `MOS` can be either [`crate::SHPLONK`] or [`crate::GWC`] (for original PLONK multi-open scheme)
-    pub fn new<MOS>(
+    pub fn new<AS>(
         stage: CircuitBuilderStage,
         break_points: Option<MultiPhaseThreadBreakPoints>,
         lookup_bits: usize,
@@ -226,16 +259,7 @@ impl AggregationCircuit {
         snarks: impl IntoIterator<Item = Snark>,
     ) -> Self
     where
-        for<'a> MOS: PolynomialCommitmentScheme<
-                G1Affine,
-                Rc<Halo2Loader<'a>>,
-                Accumulator = KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>,
-            > + MultiOpenScheme<G1Affine, Rc<Halo2Loader<'a>>, SuccinctVerifyingKey = Svk>
-            + PolynomialCommitmentScheme<
-                G1Affine,
-                NativeLoader,
-                Accumulator = KzgAccumulator<G1Affine, NativeLoader>,
-            > + MultiOpenScheme<G1Affine, NativeLoader, SuccinctVerifyingKey = Svk>,
+        AS: for<'a> Halo2KzgAccumulationScheme<'a>,
     {
         let svk: Svk = params.get_g()[0].into();
         let snarks = snarks.into_iter().collect_vec();
@@ -247,13 +271,15 @@ impl AggregationCircuit {
             .iter()
             .flat_map(|snark| {
                 transcript_read.new_stream(snark.proof());
-                let proof = Plonk::<MOS>::read_proof(
+                let proof = PlonkSuccinctVerifier::<AS>::read_proof(
                     &svk,
                     &snark.protocol,
                     &snark.instances,
                     &mut transcript_read,
-                );
-                Plonk::<MOS>::succinct_verify(&svk, &snark.protocol, &snark.instances, &proof)
+                )
+                .unwrap();
+                PlonkSuccinctVerifier::<AS>::verify(&svk, &snark.protocol, &snark.instances, &proof)
+                    .unwrap()
             })
             .collect_vec();
 
@@ -263,13 +289,9 @@ impl AggregationCircuit {
                 POSEIDON_SPEC.clone(),
             );
             let rng = StdRng::from_entropy();
-            let accumulator = KzgAs::<MOS>::create_proof(
-                &Default::default(),
-                &accumulators,
-                &mut transcript_write,
-                rng,
-            )
-            .unwrap();
+            let accumulator =
+                AS::create_proof(&Default::default(), &accumulators, &mut transcript_write, rng)
+                    .unwrap();
             (accumulator, transcript_write.finalize())
         };
 
@@ -286,7 +308,7 @@ impl AggregationCircuit {
         let loader = Halo2Loader::new(ecc_chip, builder);
 
         let (previous_instances, accumulator) =
-            aggregate::<MOS>(&svk, &loader, &snarks, as_proof.as_slice());
+            aggregate::<AS>(&svk, &loader, &snarks, as_proof.as_slice());
         let lhs = accumulator.lhs.assigned();
         let rhs = accumulator.rhs.assigned();
         let assigned_instances = lhs
@@ -322,7 +344,7 @@ impl AggregationCircuit {
         Self { inner, previous_instances, as_proof }
     }
 
-    pub fn public<MOS>(
+    pub fn public<AS>(
         stage: CircuitBuilderStage,
         break_points: Option<MultiPhaseThreadBreakPoints>,
         lookup_bits: usize,
@@ -331,65 +353,38 @@ impl AggregationCircuit {
         has_prev_accumulator: bool,
     ) -> Self
     where
-        for<'a> MOS: PolynomialCommitmentScheme<
-                G1Affine,
-                Rc<Halo2Loader<'a>>,
-                Accumulator = KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>,
-            > + MultiOpenScheme<G1Affine, Rc<Halo2Loader<'a>>, SuccinctVerifyingKey = Svk>
-            + PolynomialCommitmentScheme<
-                G1Affine,
-                NativeLoader,
-                Accumulator = KzgAccumulator<G1Affine, NativeLoader>,
-            > + MultiOpenScheme<G1Affine, NativeLoader, SuccinctVerifyingKey = Svk>,
+        AS: for<'a> Halo2KzgAccumulationScheme<'a>,
     {
-        let mut private = Self::new::<MOS>(stage, break_points, lookup_bits, params, snarks);
+        let mut private = Self::new::<AS>(stage, break_points, lookup_bits, params, snarks);
         private.expose_previous_instances(has_prev_accumulator);
         private
     }
 
     // this function is for convenience
     /// `params` should be the universal trusted setup to be used for the aggregation circuit, not the one used to generate the previous snarks, although we assume both use the same generator g[0]
-    pub fn keygen<MOS>(params: &ParamsKZG<Bn256>, snarks: impl IntoIterator<Item = Snark>) -> Self
+    pub fn keygen<AS>(params: &ParamsKZG<Bn256>, snarks: impl IntoIterator<Item = Snark>) -> Self
     where
-        for<'a> MOS: PolynomialCommitmentScheme<
-                G1Affine,
-                Rc<Halo2Loader<'a>>,
-                Accumulator = KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>,
-            > + MultiOpenScheme<G1Affine, Rc<Halo2Loader<'a>>, SuccinctVerifyingKey = Svk>
-            + PolynomialCommitmentScheme<
-                G1Affine,
-                NativeLoader,
-                Accumulator = KzgAccumulator<G1Affine, NativeLoader>,
-            > + MultiOpenScheme<G1Affine, NativeLoader, SuccinctVerifyingKey = Svk>,
+        AS: for<'a> Halo2KzgAccumulationScheme<'a>,
     {
         let lookup_bits = params.k() as usize - 1; // almost always we just use the max lookup bits possible, which is k - 1 because of blinding factors
         let circuit =
-            Self::new::<MOS>(CircuitBuilderStage::Keygen, None, lookup_bits, params, snarks);
+            Self::new::<AS>(CircuitBuilderStage::Keygen, None, lookup_bits, params, snarks);
         circuit.config(params.k(), Some(10));
         set_var("LOOKUP_BITS", lookup_bits.to_string());
         circuit
     }
 
     // this function is for convenience
-    pub fn prover<MOS>(
+    pub fn prover<AS>(
         params: &ParamsKZG<Bn256>,
         snarks: impl IntoIterator<Item = Snark>,
         break_points: MultiPhaseThreadBreakPoints,
     ) -> Self
     where
-        for<'a> MOS: PolynomialCommitmentScheme<
-                G1Affine,
-                Rc<Halo2Loader<'a>>,
-                Accumulator = KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>,
-            > + MultiOpenScheme<G1Affine, Rc<Halo2Loader<'a>>, SuccinctVerifyingKey = Svk>
-            + PolynomialCommitmentScheme<
-                G1Affine,
-                NativeLoader,
-                Accumulator = KzgAccumulator<G1Affine, NativeLoader>,
-            > + MultiOpenScheme<G1Affine, NativeLoader, SuccinctVerifyingKey = Svk>,
+        AS: for<'a> Halo2KzgAccumulationScheme<'a>,
     {
         let lookup_bits: usize = var("LOOKUP_BITS").expect("LOOKUP_BITS not set").parse().unwrap();
-        let circuit = Self::new::<MOS>(
+        let circuit = Self::new::<AS>(
             CircuitBuilderStage::Prover,
             Some(break_points),
             lookup_bits,

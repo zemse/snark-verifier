@@ -1,3 +1,5 @@
+//! `Loader` implementation in native rust.
+
 use crate::{
     loader::{EcPointLoader, LoadedEcPoint, LoadedScalar, Loader, ScalarLoader},
     util::arithmetic::{Curve, CurveAffine, FieldOps, PrimeField},
@@ -7,9 +9,12 @@ use lazy_static::lazy_static;
 use std::fmt::Debug;
 
 lazy_static! {
+    /// NativeLoader instance for [`LoadedEcPoint::loader`] and
+    /// [`LoadedScalar::loader`] referencing.
     pub static ref LOADER: NativeLoader = NativeLoader;
 }
 
+/// `Loader` implementation in native rust.
 #[derive(Clone, Debug)]
 pub struct NativeLoader;
 
@@ -50,7 +55,7 @@ impl<C: CurveAffine> EcPointLoader<C> for NativeLoader {
     ) {
         lhs.eq(rhs)
             .then_some(())
-            .unwrap_or_else(|| panic!("{:?}", Error::AssertionFailure(annotation.to_string())));
+            .unwrap_or_else(|| panic!("{:?}", Error::AssertionFailure(annotation.to_string())))
     }
 
     fn multi_scalar_multiplication(
@@ -76,7 +81,7 @@ impl<F: PrimeField> ScalarLoader<F> for NativeLoader {
     fn assert_eq(&self, annotation: &str, lhs: &Self::LoadedScalar, rhs: &Self::LoadedScalar) {
         lhs.eq(rhs)
             .then_some(())
-            .unwrap_or_else(|| panic!("{:?}", Error::AssertionFailure(annotation.to_string())));
+            .unwrap_or_else(|| panic!("{:?}", Error::AssertionFailure(annotation.to_string())))
     }
 }
 

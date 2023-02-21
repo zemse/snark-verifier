@@ -1,19 +1,26 @@
 use crate::util::arithmetic::{CurveAffine, FieldExt};
 use std::{fmt::Debug, ops::Deref};
 
+/// Instructions to handle field element operations.
 pub trait IntegerInstructions<F: FieldExt>: Clone + Debug {
+    /// Context (either enhanced `region` or some kind of builder).
     type Context: Debug;
+    /// Assigned cell.
     type AssignedCell: Clone + Debug;
+    /// Assigned integer.
     type AssignedInteger: Clone + Debug;
 
+    /// Assign an integer witness.
     fn assign_integer(
         &self,
         ctx: &mut Self::Context,
         integer: F, // witness
     ) -> Self::AssignedInteger;
 
+    /// Assign an integer constant.
     fn assign_constant(&self, ctx: &mut Self::Context, integer: F) -> Self::AssignedInteger;
 
+    /// Sum integers with coefficients and constant.
     fn sum_with_coeff_and_const(
         &self,
         ctx: &mut Self::Context,
@@ -21,6 +28,7 @@ pub trait IntegerInstructions<F: FieldExt>: Clone + Debug {
         constant: F::Scalar,
     ) -> Self::AssignedInteger;
 
+    /// Sum product of integers with coefficients and constant.
     fn sum_products_with_coeff_and_const(
         &self,
         ctx: &mut Self::Context,
@@ -32,6 +40,7 @@ pub trait IntegerInstructions<F: FieldExt>: Clone + Debug {
         constant: F::Scalar,
     ) -> Self::AssignedInteger;
 
+    /// Returns `lhs - rhs`.
     fn sub(
         &self,
         ctx: &mut Self::Context,
@@ -39,14 +48,17 @@ pub trait IntegerInstructions<F: FieldExt>: Clone + Debug {
         rhs: &Self::AssignedInteger,
     ) -> Self::AssignedInteger;
 
+    /// Returns `-value`.
     fn neg(&self, ctx: &mut Self::Context, value: &Self::AssignedInteger) -> Self::AssignedInteger;
 
+    /// Returns `1/value`.
     fn invert(
         &self,
         ctx: &mut Self::Context,
         value: &Self::AssignedInteger,
     ) -> Self::AssignedInteger;
 
+    /// Enforce `lhs` and `rhs` are equal.
     fn assert_equal(
         &self,
         ctx: &mut Self::Context,
@@ -55,24 +67,34 @@ pub trait IntegerInstructions<F: FieldExt>: Clone + Debug {
     );
 }
 
+/// Instructions to handle elliptic curve point operations.
 pub trait EccInstructions<C: CurveAffine>: Clone + Debug {
+    /// Context
     type Context: Debug + Default;
+    /// [`IntegerInstructions`] to handle scalar field operation.
     type ScalarChip: IntegerInstructions<
         C::Scalar,
         Context = Self::Context,
         AssignedCell = Self::AssignedCell,
         AssignedInteger = Self::AssignedScalar,
     >;
+    /// Assigned cell.
     type AssignedCell: Clone + Debug;
+    /// Assigned scalar field element.
     type AssignedScalar: Clone + Debug;
+    /// Assigned elliptic curve point.
     type AssignedEcPoint: Clone + Debug;
 
+    /// Returns reference of [`EccInstructions::ScalarChip`].
     fn scalar_chip(&self) -> &Self::ScalarChip;
 
+    /// Assign a elliptic curve point constant.
     fn assign_constant(&self, ctx: &mut Self::Context, ec_point: C) -> Self::AssignedEcPoint;
 
+    /// Assign a elliptic curve point witness.
     fn assign_point(&self, ctx: &mut Self::Context, ec_point: C) -> Self::AssignedEcPoint;
 
+    /// Sum elliptic curve points and constant.
     fn sum_with_const(
         &self,
         ctx: &mut Self::Context,
@@ -80,12 +102,14 @@ pub trait EccInstructions<C: CurveAffine>: Clone + Debug {
         constant: C,
     ) -> Self::AssignedEcPoint;
 
+    /// Perform fixed base multi-scalar multiplication.
     fn fixed_base_msm(
         &mut self,
         ctx: &mut Self::Context,
         pairs: &[(impl Deref<Target = Self::AssignedScalar>, C)],
     ) -> Self::AssignedEcPoint;
 
+    /// Perform variable base multi-scalar multiplication.
     fn variable_base_msm(
         &mut self,
         ctx: &mut Self::Context,
@@ -95,6 +119,7 @@ pub trait EccInstructions<C: CurveAffine>: Clone + Debug {
         )],
     ) -> Self::AssignedEcPoint;
 
+    /// Enforce `lhs` and `rhs` are equal.
     fn assert_equal(
         &self,
         ctx: &mut Self::Context,

@@ -1,4 +1,6 @@
-use super::{CircuitExt, Plonk};
+use crate::{GWC, SHPLONK};
+
+use super::{CircuitExt, PlonkVerifier};
 #[cfg(feature = "display")]
 use ark_std::{end_timer, start_timer};
 use ethereum_types::Address;
@@ -23,11 +25,11 @@ pub use snark_verifier::loader::evm::encode_calldata;
 use snark_verifier::{
     loader::evm::{compile_yul, EvmLoader, ExecutorBuilder},
     pcs::{
-        kzg::{Bdfg21, Gwc19, Kzg, KzgAccumulator, KzgDecidingKey, KzgSuccinctVerifyingKey},
-        Decider, MultiOpenScheme, PolynomialCommitmentScheme,
+        kzg::{KzgAccumulator, KzgAsVerifyingKey, KzgDecidingKey, KzgSuccinctVerifyingKey},
+        AccumulationDecider, AccumulationScheme, PolynomialCommitmentScheme,
     },
     system::halo2::{compile, transcript::evm::EvmTranscript, Config},
-    verifier::PlonkVerifier,
+    verifier::SnarkVerifier,
 };
 use std::{fs, io, path::Path, rc::Rc};
 
@@ -105,7 +107,19 @@ pub fn gen_evm_proof_shplonk<'params, C: Circuit<Fr>>(
     gen_evm_proof::<C, ProverSHPLONK<_>, VerifierSHPLONK<_>>(params, pk, circuit, instances)
 }
 
-pub fn gen_evm_verifier<C, PCS>(
+pub trait EvmKzgAccumulationScheme = PolynomialCommitmentScheme<
+        G1Affine,
+        Rc<EvmLoader>,
+        VerifyingKey = KzgSuccinctVerifyingKey<G1Affine>,
+        Output = KzgAccumulator<G1Affine, Rc<EvmLoader>>,
+    > + AccumulationScheme<
+        G1Affine,
+        Rc<EvmLoader>,
+        VerifyingKey = KzgAsVerifyingKey,
+        Accumulator = KzgAccumulator<G1Affine, Rc<EvmLoader>>,
+    > + AccumulationDecider<G1Affine, Rc<EvmLoader>, DecidingKey = KzgDecidingKey<Bn256>>;
+
+pub fn gen_evm_verifier<C, AS>(
     params: &ParamsKZG<Bn256>,
     vk: &VerifyingKey<G1Affine>,
     num_instance: Vec<usize>,
@@ -113,18 +127,8 @@ pub fn gen_evm_verifier<C, PCS>(
 ) -> Vec<u8>
 where
     C: CircuitExt<Fr>,
-    PCS: PolynomialCommitmentScheme<
-            G1Affine,
-            Rc<EvmLoader>,
-            Accumulator = KzgAccumulator<G1Affine, Rc<EvmLoader>>,
-        > + MultiOpenScheme<
-            G1Affine,
-            Rc<EvmLoader>,
-            SuccinctVerifyingKey = KzgSuccinctVerifyingKey<G1Affine>,
-        > + Decider<G1Affine, Rc<EvmLoader>, DecidingKey = KzgDecidingKey<Bn256>>,
+    AS: EvmKzgAccumulationScheme,
 {
-    let svk = params.get_g()[0].into();
-    let dk = (params.g2(), params.s_g2()).into();
     let protocol = compile(
         params,
         vk,
@@ -132,14 +136,17 @@ where
             .with_num_instance(num_instance.clone())
             .with_accumulator_indices(C::accumulator_indices()),
     );
+    // deciding key
+    let dk = (params.get_g()[0], params.g2(), params.s_g2()).into();
 
     let loader = EvmLoader::new::<Fq, Fr>();
     let protocol = protocol.loaded(&loader);
     let mut transcript = EvmTranscript::<_, Rc<EvmLoader>, _, _>::new(&loader);
 
     let instances = transcript.load_instances(num_instance);
-    let proof = Plonk::<PCS>::read_proof(&svk, &protocol, &instances, &mut transcript);
-    Plonk::<PCS>::verify(&svk, &dk, &protocol, &instances, &proof);
+    let proof =
+        PlonkVerifier::<AS>::read_proof(&dk, &protocol, &instances, &mut transcript).unwrap();
+    PlonkVerifier::<AS>::verify(&dk, &protocol, &instances, &proof).unwrap();
 
     let yul_code = loader.yul_code();
     let byte_code = compile_yul(&yul_code);
@@ -156,7 +163,7 @@ pub fn gen_evm_verifier_gwc<C: CircuitExt<Fr>>(
     num_instance: Vec<usize>,
     path: Option<&Path>,
 ) -> Vec<u8> {
-    gen_evm_verifier::<C, Kzg<Bn256, Gwc19>>(params, vk, num_instance, path)
+    gen_evm_verifier::<C, GWC>(params, vk, num_instance, path)
 }
 
 pub fn gen_evm_verifier_shplonk<C: CircuitExt<Fr>>(
@@ -165,7 +172,7 @@ pub fn gen_evm_verifier_shplonk<C: CircuitExt<Fr>>(
     num_instance: Vec<usize>,
     path: Option<&Path>,
 ) -> Vec<u8> {
-    gen_evm_verifier::<C, Kzg<Bn256, Bdfg21>>(params, vk, num_instance, path)
+    gen_evm_verifier::<C, SHPLONK>(params, vk, num_instance, path)
 }
 
 pub fn evm_verify(deployment_code: Vec<u8>, instances: Vec<Vec<Fr>>, proof: Vec<u8>) {

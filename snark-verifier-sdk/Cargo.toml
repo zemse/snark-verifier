@@ -62,10 +62,10 @@ harness = false
 
 [[bench]]
 name = "zkevm"
-required-features = ["loader_halo2", "zkevm", "halo2-pse", "halo2-base/jemallocator"]
+required-features = ["loader_halo2", "loader_evm", "zkevm", "halo2-pse"]
 harness = false
 
 [[bench]]
 name = "zkevm_plus_state"
-required-features = ["loader_halo2", "zkevm", "halo2-pse", "halo2-base/jemallocator"]
+required-features = ["loader_halo2", "loader_evm", "zkevm", "halo2-pse"]
 harness = false
