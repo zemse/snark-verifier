@@ -710,6 +710,7 @@ mod recursion {
                             &range.lookup_advice,
                             &range.q_lookup,
                             &mut region,
+                            Default::default(),
                         );
                         *circuit.break_points.borrow_mut() = assignments.break_points;
                         assigned_advices = assignments.assigned_advices;
