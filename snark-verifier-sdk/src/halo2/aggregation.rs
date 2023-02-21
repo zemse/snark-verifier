@@ -249,8 +249,8 @@ impl AggregationCircuit {
     ///
     /// The user can optionally modify the circuit after calling this function to add more instances to `assigned_instances` to expose.
     ///
-    /// Warning: will fail silently if `snarks` were created using a different multi-open scheme than `MOS`
-    /// where `MOS` can be either [`crate::SHPLONK`] or [`crate::GWC`] (for original PLONK multi-open scheme)
+    /// Warning: will fail silently if `snarks` were created using a different multi-open scheme than `AS`
+    /// where `AS` can be either [`crate::SHPLONK`] or [`crate::GWC`] (for original PLONK multi-open scheme)
     pub fn new<AS>(
         stage: CircuitBuilderStage,
         break_points: Option<MultiPhaseThreadBreakPoints>,
