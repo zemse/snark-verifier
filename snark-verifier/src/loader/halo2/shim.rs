@@ -145,7 +145,7 @@ mod halo2_lib {
         ecc::{fixed_base::FixedEcPoint, BaseFieldEccChip, EcPoint},
         fields::{FieldChip, PrimeField},
     };
-    use std::{ops::Deref, sync::Mutex};
+    use std::ops::Deref;
 
     type AssignedInteger<C> = CRTInteger<<C as CurveAffine>::ScalarExt>;
     type AssignedEcPoint<C> = EcPoint<<C as CurveAffine>::ScalarExt, AssignedInteger<C>>;
@@ -282,7 +282,7 @@ mod halo2_lib {
 
         fn variable_base_msm(
             &mut self,
-            ctx: &mut Self::Context,
+            builder: &mut Self::Context,
             pairs: &[(
                 impl Deref<Target = Self::AssignedScalar>,
                 impl Deref<Target = Self::AssignedEcPoint>,
@@ -292,21 +292,18 @@ mod halo2_lib {
                 .iter()
                 .map(|(scalar, point)| (vec![*scalar.deref()], point.deref().clone()))
                 .unzip();
-            let thread_pool = Mutex::new(std::mem::take(ctx));
-            let res = BaseFieldEccChip::<C>::variable_base_msm::<C>(
+            BaseFieldEccChip::<C>::variable_base_msm::<C>(
                 self,
-                &thread_pool,
+                builder,
                 &points,
                 scalars,
                 C::Scalar::NUM_BITS as usize,
-            );
-            *ctx = thread_pool.into_inner().unwrap();
-            res
+            )
         }
 
         fn fixed_base_msm(
             &mut self,
-            ctx: &mut Self::Context,
+            builder: &mut Self::Context,
             pairs: &[(impl Deref<Target = Self::AssignedScalar>, C)],
         ) -> Self::AssignedEcPoint {
             let (scalars, points): (Vec<_>, Vec<_>) = pairs
@@ -319,16 +316,13 @@ mod halo2_lib {
                     }
                 })
                 .unzip();
-            let thread_pool = Mutex::new(std::mem::take(ctx));
-            let res = BaseFieldEccChip::<C>::fixed_base_msm::<C>(
+            BaseFieldEccChip::<C>::fixed_base_msm::<C>(
                 self,
-                &thread_pool,
+                builder,
                 &points,
                 scalars,
                 C::Scalar::NUM_BITS as usize,
-            );
-            *ctx = thread_pool.into_inner().unwrap();
-            res
+            )
         }
 
         fn assert_equal(

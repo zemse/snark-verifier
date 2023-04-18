@@ -190,13 +190,11 @@ where
         MSMAccumulator = DualMSM<'params, Bn256>,
     >,
 {
+    #[cfg(feature = "halo2-axiom")]
     if let Some(path) = &path {
-        #[cfg(feature = "halo2-axiom")]
         if let Ok(snark) = read_snark(path) {
             return snark;
         }
-        #[cfg(not(feature = "halo2-axiom"))]
-        unimplemented!("Reading SNARKs is not supported in halo2-pse because we cannot derive Serialize/Deserialize for halo2curves field elements.");
     }
     let protocol = compile(
         params,
@@ -207,7 +205,18 @@ where
     );
 
     let instances = circuit.instances();
+    #[cfg(feature = "halo2-axiom")]
     let proof = gen_proof::<ConcreteCircuit, P, V>(params, pk, circuit, instances.clone(), None);
+    // If we can't serialize the entire snark, at least serialize the proof
+    #[cfg(not(feature = "halo2-axiom"))]
+    let proof = {
+        let path = path.map(|path| {
+            let path = path.as_ref().to_str().unwrap();
+            (format!("{path}.instances"), format!("{path}.proof"))
+        });
+        let paths = path.as_ref().map(|path| (Path::new(&path.0), Path::new(&path.1)));
+        gen_proof::<ConcreteCircuit, P, V>(params, pk, circuit, instances.clone(), paths)
+    };
 
     let snark = Snark::new(protocol, instances, proof);
     #[cfg(feature = "halo2-axiom")]
@@ -219,6 +228,7 @@ where
         #[cfg(feature = "display")]
         end_timer!(write_time);
     }
+    #[allow(clippy::let_and_return)]
     snark
 }
 

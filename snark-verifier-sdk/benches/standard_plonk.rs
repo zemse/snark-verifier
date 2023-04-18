@@ -4,7 +4,7 @@ use halo2_base::gates::builder::CircuitBuilderStage;
 use halo2_base::utils::fs::gen_srs;
 use pprof::criterion::{Output, PProfProfiler};
 use rand::rngs::OsRng;
-
+use std::path::Path;
 use ark_std::{end_timer, start_timer};
 use halo2_base::halo2_proofs;
 use halo2_proofs::halo2curves as halo2_curves;
@@ -175,8 +175,8 @@ mod application {
 fn gen_application_snark(params: &ParamsKZG<Bn256>) -> Snark {
     let circuit = application::StandardPlonk::rand(OsRng);
 
-    let pk = gen_pk(params, &circuit, None);
-    gen_snark_shplonk(params, &pk, circuit, None::<&str>)
+    let pk = gen_pk(params, &circuit, Some(Path::new("app.pk")));
+    gen_snark_shplonk(params, &pk, circuit, Some(Path::new("app.snark")))
 }
 
 fn bench(c: &mut Criterion) {
@@ -191,7 +191,7 @@ fn bench(c: &mut Criterion) {
     let agg_circuit = AggregationCircuit::keygen::<SHPLONK>(&params, snarks.clone());
 
     let start0 = start_timer!(|| "gen vk & pk");
-    let pk = gen_pk(&params, &agg_circuit, None);
+    let pk = gen_pk(&params, &agg_circuit, Some(Path::new("agg.pk")));
     end_timer!(start0);
     let break_points = agg_circuit.break_points();
 

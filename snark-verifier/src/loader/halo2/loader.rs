@@ -25,6 +25,7 @@ pub struct Halo2Loader<C: CurveAffine, EccChip: EccInstructions<C>> {
     num_ec_point: RefCell<usize>,
     _marker: PhantomData<C>,
     #[cfg(test)]
+    #[allow(dead_code)]
     row_meterings: RefCell<Vec<(String, usize)>>,
 }
 
