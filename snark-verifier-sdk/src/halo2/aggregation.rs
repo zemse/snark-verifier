@@ -136,6 +136,8 @@ where
     (previous_instances, accumulator)
 }
 
+/// Same as `FlexGateConfigParams` except we assume a single Phase and default 'Vertical' strategy.
+/// Also adds `lookup_bits` field.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AggregationConfigParams {
     pub degree: u32,
