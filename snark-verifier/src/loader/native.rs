@@ -66,7 +66,7 @@ impl<C: CurveAffine> EcPointLoader<C> for NativeLoader {
             .cloned()
             .map(|(scalar, base)| *base * scalar)
             .reduce(|acc, value| acc + value)
-            .unwrap()
+            .expect("pairs should not be empty")
             .to_affine()
     }
 }

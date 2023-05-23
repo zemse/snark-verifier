@@ -663,7 +663,7 @@ where
                 _ => ec_point.loader.ec_point_scalar_mul(ec_point, scalar),
             })
             .reduce(|acc, ec_point| acc.loader.ec_point_add(&acc, &ec_point))
-            .unwrap()
+            .expect("pairs should not be empty")
     }
 }
 

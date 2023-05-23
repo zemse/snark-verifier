@@ -536,6 +536,7 @@ impl<C: CurveAffine, EccChip: EccInstructions<C>> EcPointLoader<C> for Rc<Halo2L
     fn multi_scalar_multiplication(
         pairs: &[(&<Self as ScalarLoader<C::Scalar>>::LoadedScalar, &EcPoint<C, EccChip>)],
     ) -> EcPoint<C, EccChip> {
+        assert!(!pairs.is_empty(), "multi_scalar_multiplication: pairs is empty");
         let loader = &pairs[0].0.loader;
 
         let (constant, fixed_base, variable_base_non_scaled, variable_base_scaled) =

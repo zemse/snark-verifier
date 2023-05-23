@@ -57,6 +57,9 @@ pub type Halo2Loader<'chip> = loader::halo2::Halo2Loader<G1Affine, BaseFieldEccC
 /// Returns the assigned instances of previous snarks and the new final pair that needs to be verified in a pairing check.
 /// For each previous snark, we concatenate all instances into a single vector. We return a vector of vectors,
 /// one vector per snark, for convenience.
+///
+/// # Assumptions
+/// * `snarks` is not empty
 pub fn aggregate<'a, AS>(
     svk: &Svk,
     loader: &Rc<Halo2Loader<'a>>,
@@ -76,6 +79,7 @@ where
             VerifyingKey = KzgAsVerifyingKey,
         >,
 {
+    assert!(!snarks.is_empty(), "trying to aggregate 0 snarks");
     let assign_instances = |instances: &[Vec<Fr>]| {
         instances
             .iter()
