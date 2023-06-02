@@ -70,12 +70,10 @@ impl<F: Field> Polynomial<F> {
             let chunk_size = Integer::div_ceil(&self.len(), &num_threads);
             let mut results = vec![F::ZERO; num_threads];
             parallelize_iter(
-                results.iter_mut().zip(self.0.chunks(chunk_size)).zip(powers(x.pow_vartime(&[
-                    chunk_size as u64,
-                    0,
-                    0,
-                    0,
-                ]))),
+                results
+                    .iter_mut()
+                    .zip(self.0.chunks(chunk_size))
+                    .zip(powers(x.pow_vartime([chunk_size as u64]))),
                 |((result, coeffs), scalar)| *result = evaluate_serial(coeffs) * scalar,
             );
             results.iter().fold(F::ZERO, |acc, result| acc + result)

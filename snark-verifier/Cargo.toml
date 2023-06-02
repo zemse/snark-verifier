@@ -25,11 +25,8 @@ poseidon-rs = { git = "https://github.com/axiom-crypto/poseidon-circuit.git", re
 rayon = { version = "1.7", optional = true }
 
 # loader_evm
-sha3 = { version = "0.10.8", optional = true }
-bytes = { version = "1.4.0", default-features = false, optional = true }
-primitive-types = { version = "0.12.1", default-features = false, features = ["std"], optional = true }
-rlp = { version = "0.5.2", default-features = false, features = ["std"], optional = true }
-revm = { version = "2.3.1", optional = true }
+sha3 = { version = "0.10", optional = true }
+revm = { version = "3.3.0", optional = true }
 
 # loader_halo2
 halo2-ecc = { git = "https://github.com/axiom-crypto/halo2-lib.git", branch = "develop", default-features = false, optional = true }
@@ -47,7 +44,7 @@ tui = { version = "0.19", default-features = false, features = ["crossterm"] }
 [features]
 default = ["loader_evm", "loader_halo2", "halo2-axiom", "display"]
 display = ["halo2-base/display", "halo2-ecc?/display"]
-loader_evm = ["dep:primitive-types", "dep:sha3", "dep:revm", "dep:bytes", "dep:rlp"]
+loader_evm = ["dep:sha3", "dep:revm"]
 loader_halo2 = ["halo2-ecc"]
 parallel = ["dep:rayon"]
 # EXACTLY one of halo2-pse / halo2-axiom should always be turned on; not sure how to enforce this with Cargo
