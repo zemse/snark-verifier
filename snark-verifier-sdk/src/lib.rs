@@ -1,9 +1,9 @@
 #![feature(associated_type_defaults)]
+#![feature(trait_alias)]
 #[cfg(feature = "display")]
 use ark_std::{end_timer, start_timer};
-use halo2_base::halo2_proofs;
+use halo2_base::halo2_proofs::{self};
 use halo2_proofs::{
-    circuit::Value,
     halo2curves::{
         bn256::{Bn256, Fr, G1Affine},
         group::ff::Field,
@@ -15,7 +15,10 @@ use halo2_proofs::{
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 pub use snark_verifier::loader::native::NativeLoader;
-use snark_verifier::{pcs::kzg::LimbsEncoding, verifier, Protocol};
+use snark_verifier::{
+    pcs::kzg::{Bdfg21, Gwc19, KzgAs, LimbsEncoding},
+    verifier::{self, plonk::PlonkProtocol},
+};
 use std::{
     fs::{self, File},
     io::{self, BufReader, BufWriter},
@@ -30,58 +33,29 @@ pub mod halo2;
 pub const LIMBS: usize = 3;
 pub const BITS: usize = 88;
 
-/// PCS be either `Kzg<Bn256, Gwc19>` or `Kzg<Bn256, Bdfg21>`
-pub type Plonk<PCS> = verifier::Plonk<PCS, LimbsEncoding<LIMBS, BITS>>;
+/// AS stands for accumulation scheme.
+/// AS can be either `Kzg<Bn256, Gwc19>` (the original PLONK KZG multi-open) or `Kzg<Bn256, Bdfg21>` (SHPLONK)
+pub type PlonkVerifier<AS> = verifier::plonk::PlonkVerifier<AS, LimbsEncoding<LIMBS, BITS>>;
+pub type PlonkSuccinctVerifier<AS> =
+    verifier::plonk::PlonkSuccinctVerifier<AS, LimbsEncoding<LIMBS, BITS>>;
+pub type SHPLONK = KzgAs<Bn256, Bdfg21>;
+pub type GWC = KzgAs<Bn256, Gwc19>;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "halo2-axiom", derive(Serialize, Deserialize))]
 pub struct Snark {
-    pub protocol: Protocol<G1Affine>,
+    pub protocol: PlonkProtocol<G1Affine>,
     pub instances: Vec<Vec<Fr>>,
     pub proof: Vec<u8>,
 }
 
 impl Snark {
-    pub fn new(protocol: Protocol<G1Affine>, instances: Vec<Vec<Fr>>, proof: Vec<u8>) -> Self {
+    pub fn new(protocol: PlonkProtocol<G1Affine>, instances: Vec<Vec<Fr>>, proof: Vec<u8>) -> Self {
         Self { protocol, instances, proof }
     }
-}
 
-impl From<Snark> for SnarkWitness {
-    fn from(snark: Snark) -> Self {
-        Self {
-            protocol: snark.protocol,
-            instances: snark
-                .instances
-                .into_iter()
-                .map(|instances| instances.into_iter().map(Value::known).collect_vec())
-                .collect(),
-            proof: Value::known(snark.proof),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct SnarkWitness {
-    pub protocol: Protocol<G1Affine>,
-    pub instances: Vec<Vec<Value<Fr>>>,
-    pub proof: Value<Vec<u8>>,
-}
-
-impl SnarkWitness {
-    pub fn without_witnesses(&self) -> Self {
-        SnarkWitness {
-            protocol: self.protocol.clone(),
-            instances: self
-                .instances
-                .iter()
-                .map(|instances| vec![Value::unknown(); instances.len()])
-                .collect(),
-            proof: Value::unknown(),
-        }
-    }
-
-    pub fn proof(&self) -> Value<&[u8]> {
-        self.proof.as_ref().map(Vec::as_slice)
+    pub fn proof(&self) -> &[u8] {
+        &self.proof[..]
     }
 }
 
@@ -194,7 +168,7 @@ mod zkevm {
         fn instances(&self) -> Vec<Vec<F>> {
             vec![]
         }
-        fn num_instance() -> Vec<usize> {
+        fn num_instance(&self) -> Vec<usize> {
             vec![]
         }
     }
@@ -203,7 +177,7 @@ mod zkevm {
         fn instances(&self) -> Vec<Vec<F>> {
             vec![]
         }
-        fn num_instance() -> Vec<usize> {
+        fn num_instance(&self) -> Vec<usize> {
             vec![]
         }
     }

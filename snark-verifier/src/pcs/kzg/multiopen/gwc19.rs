@@ -2,8 +2,8 @@ use crate::{
     cost::{Cost, CostEstimation},
     loader::{LoadedScalar, Loader},
     pcs::{
-        kzg::{Kzg, KzgAccumulator, KzgSuccinctVerifyingKey},
-        MultiOpenScheme, Query,
+        kzg::{KzgAccumulator, KzgAs, KzgSuccinctVerifyingKey},
+        PolynomialCommitmentScheme, Query,
     },
     util::{
         arithmetic::{CurveAffine, MultiMillerLoop, PrimeField},
@@ -11,42 +11,48 @@ use crate::{
         transcript::TranscriptRead,
         Itertools,
     },
+    Error,
 };
 
+/// Verifier of multi-open KZG. It is for the GWC implementation
+/// in [`halo2_proofs`].
+/// Notations are following <https://eprint.iacr.org/2019/953.pdf>.
 #[derive(Clone, Debug)]
 pub struct Gwc19;
 
-impl<M, L> MultiOpenScheme<M::G1Affine, L> for Kzg<M, Gwc19>
+impl<M, L> PolynomialCommitmentScheme<M::G1Affine, L> for KzgAs<M, Gwc19>
 where
     M: MultiMillerLoop,
     L: Loader<M::G1Affine>,
 {
-    type SuccinctVerifyingKey = KzgSuccinctVerifyingKey<M::G1Affine>;
+    type VerifyingKey = KzgSuccinctVerifyingKey<M::G1Affine>;
     type Proof = Gwc19Proof<M::G1Affine, L>;
+    type Output = KzgAccumulator<M::G1Affine, L>;
 
     fn read_proof<T>(
-        _: &Self::SuccinctVerifyingKey,
+        _: &Self::VerifyingKey,
         queries: &[Query<M::Scalar>],
         transcript: &mut T,
-    ) -> Self::Proof
+    ) -> Result<Self::Proof, Error>
     where
         T: TranscriptRead<M::G1Affine, L>,
     {
         Gwc19Proof::read(queries, transcript)
     }
 
-    fn succinct_verify(
-        svk: &Self::SuccinctVerifyingKey,
+    fn verify(
+        svk: &Self::VerifyingKey,
         commitments: &[Msm<M::G1Affine, L>],
         z: &L::LoadedScalar,
         queries: &[Query<M::Scalar, L::LoadedScalar>],
         proof: &Self::Proof,
-    ) -> Self::Accumulator {
+    ) -> Result<Self::Output, Error> {
         let sets = query_sets(queries);
         let powers_of_u = &proof.u.powers(sets.len());
         let f = {
-            let powers_of_v =
-                proof.v.powers(Iterator::max(sets.iter().map(|set| set.polys.len())).unwrap());
+            let powers_of_v = proof
+                .v
+                .powers(sets.iter().map(|set| set.polys.len()).max().unwrap());
             sets.iter()
                 .map(|set| set.msm(commitments, &powers_of_v))
                 .zip(powers_of_u.iter())
@@ -61,15 +67,20 @@ where
             .zip(powers_of_u.iter())
             .map(|(w, power_of_u)| Msm::base(w) * power_of_u)
             .collect_vec();
-        let lhs = f + rhs.iter().zip(z_omegas).map(|(uw, z_omega)| uw.clone() * &z_omega).sum();
+        let lhs = f + rhs
+            .iter()
+            .zip(z_omegas)
+            .map(|(uw, z_omega)| uw.clone() * &z_omega)
+            .sum();
 
-        KzgAccumulator::new(
+        Ok(KzgAccumulator::new(
             lhs.evaluate(Some(svk.g)),
             rhs.into_iter().sum::<Msm<_, _>>().evaluate(Some(svk.g)),
-        )
+        ))
     }
 }
 
+/// Structured proof of [`Gwc19`].
 #[derive(Clone, Debug)]
 pub struct Gwc19Proof<C, L>
 where
@@ -86,14 +97,14 @@ where
     C: CurveAffine,
     L: Loader<C>,
 {
-    fn read<T>(queries: &[Query<C::Scalar>], transcript: &mut T) -> Self
+    fn read<T>(queries: &[Query<C::Scalar>], transcript: &mut T) -> Result<Self, Error>
     where
         T: TranscriptRead<C, L>,
     {
         let v = transcript.squeeze_challenge();
-        let ws = transcript.read_n_ec_points(query_sets(queries).len()).unwrap();
+        let ws = transcript.read_n_ec_points(query_sets(queries).len())?;
         let u = transcript.squeeze_challenge();
-        Gwc19Proof { v, ws, u }
+        Ok(Gwc19Proof { v, ws, u })
     }
 }
 
@@ -146,7 +157,7 @@ where
     })
 }
 
-impl<M> CostEstimation<M::G1Affine> for Kzg<M, Gwc19>
+impl<M> CostEstimation<M::G1Affine> for KzgAs<M, Gwc19>
 where
     M: MultiMillerLoop,
 {
@@ -154,6 +165,10 @@ where
 
     fn estimate_cost(queries: &Vec<Query<M::Scalar>>) -> Cost {
         let num_w = query_sets(queries).len();
-        Cost::new(0, num_w, 0, num_w)
+        Cost {
+            num_commitment: num_w,
+            num_msm: num_w,
+            ..Default::default()
+        }
     }
 }

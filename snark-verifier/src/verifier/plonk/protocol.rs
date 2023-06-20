@@ -1,10 +1,9 @@
 use crate::{
-    loader::{LoadedScalar, Loader},
+    loader::{native::NativeLoader, LoadedScalar, Loader},
     util::{
         arithmetic::{CurveAffine, Domain, Field, Fraction, Rotation},
         Itertools,
     },
-    Protocol,
 };
 use num_integer::Integer;
 use num_traits::One;
@@ -17,11 +16,94 @@ use std::{
     ops::{Add, Mul, Neg, Sub},
 };
 
-impl<C> Protocol<C>
+/// Protocol specifying configuration of a PLONK.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlonkProtocol<C, L = NativeLoader>
+where
+    C: CurveAffine,
+    L: Loader<C>,
+{
+    #[serde(bound(
+        serialize = "C::Scalar: Serialize",
+        deserialize = "C::Scalar: Deserialize<'de>"
+    ))]
+    /// Working domain.
+    pub domain: Domain<C::Scalar>,
+    #[serde(bound(
+        serialize = "L::LoadedEcPoint: Serialize",
+        deserialize = "L::LoadedEcPoint: Deserialize<'de>"
+    ))]
+    /// Commitments of preprocessed polynomials.
+    pub preprocessed: Vec<L::LoadedEcPoint>,
+    /// Number of instances in each instance polynomial.
+    pub num_instance: Vec<usize>,
+    /// Number of witness polynomials in each phase.
+    pub num_witness: Vec<usize>,
+    /// Number of challenges to squeeze from transcript after each phase.
+    pub num_challenge: Vec<usize>,
+    /// Evaluations to read from transcript.
+    pub evaluations: Vec<Query>,
+    /// [`crate::pcs::PolynomialCommitmentScheme`] queries to verify.
+    pub queries: Vec<Query>,
+    /// Structure of quotient polynomial.
+    pub quotient: QuotientPolynomial<C::Scalar>,
+    #[serde(bound(
+        serialize = "L::LoadedScalar: Serialize",
+        deserialize = "L::LoadedScalar: Deserialize<'de>"
+    ))]
+    /// Prover and verifier common initial state to write to transcript if any.
+    pub transcript_initial_state: Option<L::LoadedScalar>,
+    /// Instance polynomials commiting key if any.
+    pub instance_committing_key: Option<InstanceCommittingKey<C>>,
+    /// Linearization strategy.
+    pub linearization: Option<LinearizationStrategy>,
+    /// Indices (instance polynomial index, row) of encoded
+    /// [`crate::pcs::AccumulationScheme::Accumulator`]s.
+    pub accumulator_indices: Vec<Vec<(usize, usize)>>,
+}
+
+impl<C, L> PlonkProtocol<C, L>
+where
+    C: CurveAffine,
+    L: Loader<C>,
+{
+    pub(super) fn langranges(&self) -> impl IntoIterator<Item = i32> {
+        let instance_eval_lagrange = self.instance_committing_key.is_none().then(|| {
+            let queries = {
+                let offset = self.preprocessed.len();
+                let range = offset..offset + self.num_instance.len();
+                self.quotient
+                    .numerator
+                    .used_query()
+                    .into_iter()
+                    .filter(move |query| range.contains(&query.poly))
+            };
+            let (min_rotation, max_rotation) = queries.fold((0, 0), |(min, max), query| {
+                if query.rotation.0 < min {
+                    (query.rotation.0, max)
+                } else if query.rotation.0 > max {
+                    (min, query.rotation.0)
+                } else {
+                    (min, max)
+                }
+            });
+            let max_instance_len = self.num_instance.iter().max().copied().unwrap_or_default();
+            -max_rotation..max_instance_len as i32 + min_rotation.abs()
+        });
+        self.quotient
+            .numerator
+            .used_langrange()
+            .into_iter()
+            .chain(instance_eval_lagrange.into_iter().flatten())
+    }
+}
+impl<C> PlonkProtocol<C>
 where
     C: CurveAffine,
 {
-    pub fn loaded<L: Loader<C>>(&self, loader: &L) -> Protocol<C, L> {
+    /// Loaded `PlonkProtocol` with `preprocessed` and
+    /// `transcript_initial_state` loaded as constant.
+    pub fn loaded<L: Loader<C>>(&self, loader: &L) -> PlonkProtocol<C, L> {
         let preprocessed = self
             .preprocessed
             .iter()
@@ -31,7 +113,7 @@ where
             .transcript_initial_state
             .as_ref()
             .map(|transcript_initial_state| loader.load_const(transcript_initial_state));
-        Protocol {
+        PlonkProtocol {
             domain: self.domain.clone(),
             preprocessed,
             num_instance: self.num_instance.clone(),
@@ -44,6 +126,53 @@ where
             instance_committing_key: self.instance_committing_key.clone(),
             linearization: self.linearization,
             accumulator_indices: self.accumulator_indices.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "loader_halo2")]
+mod halo2 {
+    use crate::{
+        loader::halo2::{EccInstructions, Halo2Loader},
+        util::arithmetic::CurveAffine,
+        verifier::plonk::PlonkProtocol,
+    };
+    use std::rc::Rc;
+
+    impl<C> PlonkProtocol<C>
+    where
+        C: CurveAffine,
+    {
+        /// Loaded `PlonkProtocol` with `preprocessed` and
+        /// `transcript_initial_state` loaded as witness, which is useful when
+        /// doing recursion.
+        pub fn loaded_preprocessed_as_witness<EccChip: EccInstructions<C>>(
+            &self,
+            loader: &Rc<Halo2Loader<C, EccChip>>,
+        ) -> PlonkProtocol<C, Rc<Halo2Loader<C, EccChip>>> {
+            let preprocessed = self
+                .preprocessed
+                .iter()
+                .map(|preprocessed| loader.assign_ec_point(*preprocessed))
+                .collect();
+            let transcript_initial_state = self
+                .transcript_initial_state
+                .as_ref()
+                .map(|transcript_initial_state| loader.assign_scalar(*transcript_initial_state));
+            PlonkProtocol {
+                domain: self.domain.clone(),
+                preprocessed,
+                num_instance: self.num_instance.clone(),
+                num_witness: self.num_witness.clone(),
+                num_challenge: self.num_challenge.clone(),
+                evaluations: self.evaluations.clone(),
+                queries: self.queries.clone(),
+                quotient: self.quotient.clone(),
+                transcript_initial_state,
+                instance_committing_key: self.instance_committing_key.clone(),
+                linearization: self.linearization,
+                accumulator_indices: self.accumulator_indices.clone(),
+            }
         }
     }
 }
@@ -150,11 +279,14 @@ pub struct QuotientPolynomial<F: Clone> {
 
 impl<F: Clone> QuotientPolynomial<F> {
     pub fn num_chunk(&self) -> usize {
-        Integer::div_ceil(&(self.numerator.degree() - 1), &self.chunk_degree)
+        Integer::div_ceil(
+            &(self.numerator.degree().checked_sub(1).unwrap_or_default()),
+            &self.chunk_degree,
+        )
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Query {
     pub poly: usize,
     pub rotation: Rotation,
