@@ -54,9 +54,10 @@ pub struct SnarkAggregationWitness<'a> {
 }
 
 /// Different possible stages of universality the aggregation circuit can support
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Default)]
 pub enum VerifierUniversality {
     /// Default: verifier is specific to a single circuit
+    #[default]
     None,
     /// Preprocessed digest (commitments to fixed columns) is loaded as witness
     PreprocessedAsWitness,
