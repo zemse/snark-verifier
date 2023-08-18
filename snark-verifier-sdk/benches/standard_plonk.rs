@@ -12,7 +12,7 @@ use halo2_proofs::{
 use pprof::criterion::{Output, PProfProfiler};
 use rand::rngs::OsRng;
 use snark_verifier_sdk::evm::{evm_verify, gen_evm_proof_shplonk, gen_evm_verifier_shplonk};
-use snark_verifier_sdk::halo2::aggregation::AggregationConfigParams;
+use snark_verifier_sdk::halo2::aggregation::{AggregationConfigParams, VerifierUniversality};
 use snark_verifier_sdk::{
     gen_pk,
     halo2::{aggregation::AggregationCircuit, gen_proof_shplonk, gen_snark_shplonk},
@@ -193,6 +193,7 @@ fn bench(c: &mut Criterion) {
         None,
         &params,
         snarks.clone(),
+        VerifierUniversality::None,
     );
 
     let start0 = start_timer!(|| "gen vk & pk");
@@ -213,6 +214,7 @@ fn bench(c: &mut Criterion) {
                     Some(break_points.clone()),
                     params,
                     snarks.clone(),
+                    VerifierUniversality::None,
                 );
                 let instances = agg_circuit.instances();
                 gen_proof_shplonk(params, pk, agg_circuit, instances, None)
@@ -230,6 +232,7 @@ fn bench(c: &mut Criterion) {
             Some(break_points),
             &params,
             snarks.clone(),
+            VerifierUniversality::None,
         );
         let num_instances = agg_circuit.num_instance();
         let instances = agg_circuit.instances();

@@ -6,7 +6,7 @@ use crate::{
         PolynomialCommitmentScheme, Query,
     },
     util::{
-        arithmetic::{CurveAffine, MultiMillerLoop, PrimeField},
+        arithmetic::{CurveAffine, MultiMillerLoop, Rotation},
         msm::Msm,
         transcript::TranscriptRead,
         Itertools,
@@ -32,7 +32,7 @@ where
 
     fn read_proof<T>(
         _: &Self::VerifyingKey,
-        queries: &[Query<M::Fr>],
+        queries: &[Query<Rotation>],
         transcript: &mut T,
     ) -> Result<Self::Proof, Error>
     where
@@ -45,7 +45,7 @@ where
         svk: &Self::VerifyingKey,
         commitments: &[Msm<M::G1Affine, L>],
         z: &L::LoadedScalar,
-        queries: &[Query<M::Fr, L::LoadedScalar>],
+        queries: &[Query<Rotation, L::LoadedScalar>],
         proof: &Self::Proof,
     ) -> Result<Self::Output, Error> {
         let sets = query_sets(queries);
@@ -58,7 +58,10 @@ where
                 .map(|(msm, power_of_u)| msm * power_of_u)
                 .sum::<Msm<_, _>>()
         };
-        let z_omegas = sets.iter().map(|set| z.loader().load_const(&set.shift) * z);
+        let z_omegas = sets.iter().map(|set| {
+            let loaded_shift = set.loaded_shift.clone();
+            loaded_shift * z
+        });
 
         let rhs = proof
             .ws
@@ -92,7 +95,7 @@ where
     C: CurveAffine,
     L: Loader<C>,
 {
-    fn read<T>(queries: &[Query<C::Scalar>], transcript: &mut T) -> Result<Self, Error>
+    fn read<T>(queries: &[Query<Rotation>], transcript: &mut T) -> Result<Self, Error>
     where
         T: TranscriptRead<C, L>,
     {
@@ -103,22 +106,25 @@ where
     }
 }
 
-struct QuerySet<'a, F, T> {
-    shift: F,
+struct QuerySet<'a, S, T> {
+    shift: S,
+    loaded_shift: T,
     polys: Vec<usize>,
     evals: Vec<&'a T>,
 }
 
-impl<'a, F, T> QuerySet<'a, F, T>
+impl<'a, S, T> QuerySet<'a, S, T>
 where
-    F: PrimeField,
     T: Clone,
 {
     fn msm<C: CurveAffine, L: Loader<C, LoadedScalar = T>>(
         &self,
         commitments: &[Msm<'a, C, L>],
         powers_of_v: &[L::LoadedScalar],
-    ) -> Msm<C, L> {
+    ) -> Msm<C, L>
+    where
+        T: LoadedScalar<C::Scalar>,
+    {
         self.polys
             .iter()
             .zip(self.evals.iter().cloned())
@@ -132,9 +138,9 @@ where
     }
 }
 
-fn query_sets<F, T>(queries: &[Query<F, T>]) -> Vec<QuerySet<F, T>>
+fn query_sets<S, T>(queries: &[Query<S, T>]) -> Vec<QuerySet<S, T>>
 where
-    F: PrimeField,
+    S: PartialEq + Copy,
     T: Clone + PartialEq,
 {
     queries.iter().fold(Vec::new(), |mut sets, query| {
@@ -144,6 +150,7 @@ where
         } else {
             sets.push(QuerySet {
                 shift: query.shift,
+                loaded_shift: query.loaded_shift.clone(),
                 polys: vec![query.poly],
                 evals: vec![&query.eval],
             });
@@ -156,9 +163,9 @@ impl<M> CostEstimation<M::G1Affine> for KzgAs<M, Gwc19>
 where
     M: MultiMillerLoop,
 {
-    type Input = Vec<Query<M::Fr>>;
+    type Input = Vec<Query<Rotation>>;
 
-    fn estimate_cost(queries: &Vec<Query<M::Fr>>) -> Cost {
+    fn estimate_cost(queries: &Vec<Query<Rotation>>) -> Cost {
         let num_w = query_sets(queries).len();
         Cost { num_commitment: num_w, num_msm: num_w, ..Default::default() }
     }

@@ -141,6 +141,7 @@ pub fn compile<'a, C: CurveAffine, P: Params<'a, C>>(
 
     PlonkProtocol {
         domain,
+        domain_as_witness: None,
         preprocessed,
         num_instance: polynomials.num_instance(),
         num_witness: polynomials.num_witness(),

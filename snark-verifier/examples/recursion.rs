@@ -373,7 +373,7 @@ mod recursion {
     ) -> (Vec<Vec<AssignedValue<Fr>>>, Vec<KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>>) {
         let protocol = if let Some(preprocessed_digest) = preprocessed_digest {
             let preprocessed_digest = loader.scalar_from_assigned(preprocessed_digest);
-            let protocol = snark.protocol.loaded_preprocessed_as_witness(loader);
+            let protocol = snark.protocol.loaded_preprocessed_as_witness(loader, false);
             let inputs = protocol
                 .preprocessed
                 .iter()

@@ -632,6 +632,10 @@ impl<F: PrimeField<Repr = [u8; 0x20]>> LoadedScalar<F> for Scalar {
     fn loader(&self) -> &Self::Loader {
         &self.loader
     }
+
+    fn pow_var(&self, _exp: &Self, _exp_max_bits: usize) -> Self {
+        todo!()
+    }
 }
 
 impl<C> EcPointLoader<C> for Rc<EvmLoader>

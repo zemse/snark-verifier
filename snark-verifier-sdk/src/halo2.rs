@@ -35,6 +35,7 @@ use snark_verifier::{
         AccumulationScheme, PolynomialCommitmentScheme, Query,
     },
     system::halo2::{compile, Config},
+    util::arithmetic::Rotation,
     util::transcript::TranscriptWrite,
     verifier::plonk::PlonkProof,
 };
@@ -122,20 +123,25 @@ where
     end_timer!(proof_time);
 
     // validate proof before caching
-    assert!({
-        let mut transcript_read =
-            PoseidonTranscript::<NativeLoader, &[u8]>::from_spec(&proof[..], POSEIDON_SPEC.clone());
-        VerificationStrategy::<_, V>::finalize(
-            verify_proof::<_, V, _, _, _>(
-                params.verifier_params(),
-                pk.get_vk(),
-                AccumulatorStrategy::new(params.verifier_params()),
-                &[instances.as_slice()],
-                &mut transcript_read,
+    assert!(
+        {
+            let mut transcript_read = PoseidonTranscript::<NativeLoader, &[u8]>::from_spec(
+                &proof[..],
+                POSEIDON_SPEC.clone(),
+            );
+            VerificationStrategy::<_, V>::finalize(
+                verify_proof::<_, V, _, _, _>(
+                    params.verifier_params(),
+                    pk.get_vk(),
+                    AccumulatorStrategy::new(params.verifier_params()),
+                    &[instances.as_slice()],
+                    &mut transcript_read,
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        )
-    });
+        },
+        "SNARK proof failed to verify"
+    );
 
     if let Some((instance_path, proof_path)) = path {
         write_instances(&instances, instance_path);
@@ -286,7 +292,7 @@ where
             NativeLoader,
             Accumulator = KzgAccumulator<G1Affine, NativeLoader>,
             VerifyingKey = KzgAsVerifyingKey,
-        > + CostEstimation<G1Affine, Input = Vec<Query<Fr>>>,
+        > + CostEstimation<G1Affine, Input = Vec<Query<Rotation>>>,
 {
     struct CsProxy<F, C>(PhantomData<(F, C)>);
 

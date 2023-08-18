@@ -9,7 +9,7 @@ use halo2_proofs::{halo2curves::bn256::Bn256, poly::kzg::commitment::ParamsKZG};
 use pprof::criterion::{Output, PProfProfiler};
 use rand::rngs::OsRng;
 
-use snark_verifier_sdk::halo2::aggregation::AggregationConfigParams;
+use snark_verifier_sdk::halo2::aggregation::{AggregationConfigParams, VerifierUniversality};
 use snark_verifier_sdk::{
     gen_pk,
     halo2::{aggregation::AggregationCircuit, gen_snark_shplonk},
@@ -190,6 +190,7 @@ fn bench(c: &mut Criterion) {
         None,
         &params,
         snarks,
+        VerifierUniversality::None,
     );
 
     std::fs::remove_file("examples/agg.pk").ok();

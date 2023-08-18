@@ -43,12 +43,46 @@ pub type Svk = KzgSuccinctVerifyingKey<G1Affine>;
 pub type BaseFieldEccChip<'chip> = halo2_ecc::ecc::BaseFieldEccChip<'chip, G1Affine>;
 pub type Halo2Loader<'chip> = loader::halo2::Halo2Loader<G1Affine, BaseFieldEccChip<'chip>>;
 
+pub struct SnarkAggregationWitness<'a> {
+    pub previous_instances: Vec<Vec<AssignedValue<Fr>>>,
+    pub accumulator: KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>,
+    /// This returns the assigned `preprocessed` and `transcript_initial_state` values as a vector of assigned values, one for each aggregated snark.
+    /// These can then be exposed as public instances.
+    ///
+    /// This is only useful if preprocessed digest is loaded as witness (i.e., `preprocessed_as_witness` is true in `aggregate`), so we set it to `None` otherwise.
+    pub preprocessed_digests: Option<Vec<Vec<AssignedValue<Fr>>>>,
+}
+
+/// Different possible stages of universality the aggregation circuit can support
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum VerifierUniversality {
+    /// Default: verifier is specific to a single circuit
+    None,
+    /// Preprocessed digest (commitments to fixed columns) is loaded as witness
+    PreprocessedAsWitness,
+    /// Preprocessed as witness and number of rows in the circuit `n` loaded as witness
+    Full,
+}
+
+impl VerifierUniversality {
+    pub fn preprocessed_as_witness(&self) -> bool {
+        self != &VerifierUniversality::None
+    }
+
+    pub fn n_as_witness(&self) -> bool {
+        self == &VerifierUniversality::Full
+    }
+}
+
 #[allow(clippy::type_complexity)]
 /// Core function used in `synthesize` to aggregate multiple `snarks`.
 ///  
 /// Returns the assigned instances of previous snarks and the new final pair that needs to be verified in a pairing check.
 /// For each previous snark, we concatenate all instances into a single vector. We return a vector of vectors,
 /// one vector per snark, for convenience.
+///
+/// - `preprocessed_as_witness`: flag for whether preprocessed digest (i.e., verifying key) should be loaded as witness (if false, loaded as constant)
+///     - If `preprocessed_as_witness` is true, number of circuit rows `domain.n` is also loaded as a witness
 ///
 /// # Assumptions
 /// * `snarks` is not empty
@@ -57,7 +91,8 @@ pub fn aggregate<'a, AS>(
     loader: &Rc<Halo2Loader<'a>>,
     snarks: &[Snark],
     as_proof: &[u8],
-) -> (Vec<Vec<AssignedValue<Fr>>>, KzgAccumulator<G1Affine, Rc<Halo2Loader<'a>>>)
+    universality: VerifierUniversality,
+) -> SnarkAggregationWitness<'a>
 where
     AS: PolynomialCommitmentScheme<
             G1Affine,
@@ -82,6 +117,7 @@ where
     };
 
     let mut previous_instances = Vec::with_capacity(snarks.len());
+    let mut preprocessed_digests = Vec::with_capacity(snarks.len());
     // to avoid re-loading the spec each time, we create one transcript and clear the stream
     let mut transcript = PoseidonTranscript::<Rc<Halo2Loader<'a>>, &[u8]>::from_spec(
         loader,
@@ -89,10 +125,42 @@ where
         POSEIDON_SPEC.clone(),
     );
 
+    let preprocessed_as_witness = universality.preprocessed_as_witness();
     let mut accumulators = snarks
         .iter()
-        .flat_map(|snark| {
-            let protocol = snark.protocol.loaded(loader);
+        .flat_map(|snark: &Snark| {
+            let protocol = if preprocessed_as_witness {
+                // always load `domain.n` as witness if vkey is witness
+                snark.protocol.loaded_preprocessed_as_witness(loader, universality.n_as_witness())
+            } else {
+                snark.protocol.loaded(loader)
+            };
+            let inputs = protocol
+                .preprocessed
+                .iter()
+                .flat_map(|preprocessed| {
+                    let assigned = preprocessed.assigned();
+                    [assigned.x(), assigned.y()]
+                        .into_iter()
+                        .flat_map(|coordinate| coordinate.limbs().to_vec())
+                        .collect_vec()
+                })
+                .chain(
+                    protocol.transcript_initial_state.clone().map(|scalar| scalar.into_assigned()),
+                )
+                .chain(
+                    protocol
+                        .domain_as_witness
+                        .as_ref()
+                        .map(|domain| domain.n.clone().into_assigned()),
+                ) // If `n` is witness, add it as part of input
+                .chain(
+                    protocol
+                        .domain_as_witness
+                        .as_ref()
+                        .map(|domain| domain.gen.clone().into_assigned()),
+                ) // If `n` is witness, add the generator of the order `n` subgroup as part of input
+                .collect_vec();
             let instances = assign_instances(&snark.instances);
 
             // read the transcript and perform Fiat-Shamir
@@ -111,6 +179,7 @@ where
             previous_instances.push(
                 instances.into_iter().flatten().map(|scalar| scalar.into_assigned()).collect(),
             );
+            preprocessed_digests.push(inputs);
 
             accumulator
         })
@@ -129,8 +198,9 @@ where
     } else {
         accumulators.pop().unwrap()
     };
+    let preprocessed_digests = preprocessed_as_witness.then_some(preprocessed_digests);
 
-    (previous_instances, accumulator)
+    SnarkAggregationWitness { previous_instances, accumulator, preprocessed_digests }
 }
 
 /// Same as `FlexGateConfigParams` except we assume a single Phase and default 'Vertical' strategy.
@@ -187,6 +257,14 @@ impl TryFrom<&BaseConfigParams> for AggregationConfigParams {
     }
 }
 
+impl TryFrom<BaseConfigParams> for AggregationConfigParams {
+    type Error = &'static str;
+
+    fn try_from(value: BaseConfigParams) -> Result<Self, Self::Error> {
+        Self::try_from(&value)
+    }
+}
+
 /// Holds virtual contexts for the cells used to verify a collection of snarks
 #[derive(Clone, Debug)]
 pub struct AggregationCtxBuilder {
@@ -196,6 +274,11 @@ pub struct AggregationCtxBuilder {
     pub accumulator: Vec<AssignedValue<Fr>>,
     // the public instances from previous snarks that were aggregated
     pub previous_instances: Vec<Vec<AssignedValue<Fr>>>,
+    /// This returns the assigned `preprocessed_digest` (vkey), optional `transcript_initial_state`, `domain.n` (optional), and `omega` (optional) values as a vector of assigned values, one for each aggregated snark.
+    /// These can then be exposed as public instances.
+    ///
+    /// This is only useful if preprocessed digest is loaded as witness (i.e., `universality != None`), so we set it to `None` if `universality == None`.
+    pub preprocessed_digests: Option<Vec<Vec<AssignedValue<Fr>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -204,6 +287,11 @@ pub struct AggregationCircuit {
     // the public instances from previous snarks that were aggregated, now collected as PRIVATE assigned values
     // the user can optionally append these to `inner.assigned_instances` to expose them
     pub previous_instances: Vec<Vec<AssignedValue<Fr>>>,
+    /// This returns the assigned `preprocessed_digest` (vkey), optional `transcript_initial_state`, `domain.n` (optional), and `omega` (optional) values as a vector of assigned values, one for each aggregated snark.
+    /// These can then be exposed as public instances.
+    ///
+    /// This is only useful if preprocessed digest is loaded as witness (i.e., `universality != None`), so we set it to `None` if `universality == None`.
+    pub preprocessed_digests: Option<Vec<Vec<AssignedValue<Fr>>>>,
     // accumulation scheme proof, private input
     // pub as_proof: Vec<u8>,
 }
@@ -236,13 +324,21 @@ impl AggregationCtxBuilder {
     ///
     /// Also returns the limbs of the pair of elliptic curve points, referred to as the `accumulator`, that need to be verified in a final pairing check.
     ///
-    /// Warning: will fail silently if `snarks` were created using a different multi-open scheme than `AS`
+    /// # Universality
+    /// - If `universality` is not `None`, then the verifying keys of each snark in `snarks` is loaded as a witness in the circuit.
+    /// - Moreover, if `universality` is `Full`, then the number of rows `n` of each snark in `snarks` is also loaded as a witness. In this case the generator `omega` of the order `n` multiplicative subgroup of `F` is also loaded as a witness.
+    /// - By default, these witnesses are _private_ and returned in `self.preprocessed_
+    /// - The user can optionally modify the circuit after calling this function to add more instances to `assigned_instances` to expose.
+    ///
+    /// # Warning
+    /// Will fail silently if `snarks` were created using a different multi-open scheme than `AS`
     /// where `AS` can be either [`crate::SHPLONK`] or [`crate::GWC`] (for original PLONK multi-open scheme)
     pub fn new<AS>(
         witness_gen_only: bool,
         lookup_bits: usize,
         params: &ParamsKZG<Bn256>,
         snarks: impl IntoIterator<Item = Snark>,
+        universality: VerifierUniversality,
     ) -> Self
     where
         AS: for<'a> Halo2KzgAccumulationScheme<'a>,
@@ -289,8 +385,8 @@ impl AggregationCtxBuilder {
         let ecc_chip = BaseFieldEccChip::new(&fp_chip);
         let loader = Halo2Loader::new(ecc_chip, builder);
 
-        let (previous_instances, accumulator) =
-            aggregate::<AS>(&svk, &loader, &snarks, as_proof.as_slice());
+        let SnarkAggregationWitness { previous_instances, accumulator, preprocessed_digests } =
+            aggregate::<AS>(&svk, &loader, &snarks, as_proof.as_slice(), universality);
         let lhs = accumulator.lhs.assigned();
         let rhs = accumulator.rhs.assigned();
         let accumulator = lhs
@@ -314,13 +410,15 @@ impl AggregationCtxBuilder {
         }
 
         let builder = loader.take_ctx();
-        Self { builder, accumulator, previous_instances }
+        Self { builder, accumulator, previous_instances, preprocessed_digests }
     }
 }
 
 impl AggregationCircuit {
     /// Given snarks, this creates a circuit and runs the `GateThreadBuilder` to verify all the snarks.
     /// By default, the returned circuit has public instances equal to the limbs of the pair of elliptic curve points, referred to as the `accumulator`, that need to be verified in a final pairing check.
+    ///
+    /// See [`AggregationCtxBuilder`] for more details.
     ///
     /// The user can optionally modify the circuit after calling this function to add more instances to `assigned_instances` to expose.
     ///
@@ -332,17 +430,23 @@ impl AggregationCircuit {
         break_points: Option<MultiPhaseThreadBreakPoints>,
         params: &ParamsKZG<Bn256>,
         snarks: impl IntoIterator<Item = Snark>,
+        universality: VerifierUniversality,
     ) -> Self
     where
         AS: for<'a> Halo2KzgAccumulationScheme<'a>,
     {
-        let AggregationCtxBuilder { builder, accumulator, previous_instances } =
-            AggregationCtxBuilder::new::<AS>(
-                stage == CircuitBuilderStage::Prover,
-                agg_config.lookup_bits,
-                params,
-                snarks,
-            );
+        let AggregationCtxBuilder {
+            builder,
+            accumulator,
+            previous_instances,
+            preprocessed_digests,
+        } = AggregationCtxBuilder::new::<AS>(
+            stage == CircuitBuilderStage::Prover,
+            agg_config.lookup_bits,
+            params,
+            snarks,
+            universality,
+        );
         let inner = RangeWithInstanceCircuitBuilder::from_stage(
             stage,
             builder,
@@ -350,7 +454,7 @@ impl AggregationCircuit {
             break_points,
             accumulator,
         );
-        Self { inner, previous_instances }
+        Self { inner, previous_instances, preprocessed_digests }
     }
 
     pub fn public<AS>(
@@ -364,7 +468,14 @@ impl AggregationCircuit {
     where
         AS: for<'a> Halo2KzgAccumulationScheme<'a>,
     {
-        let mut private = Self::new::<AS>(stage, agg_config, break_points, params, snarks);
+        let mut private = Self::new::<AS>(
+            stage,
+            agg_config,
+            break_points,
+            params,
+            snarks,
+            VerifierUniversality::None,
+        );
         private.expose_previous_instances(has_prev_accumulator);
         private
     }
@@ -380,11 +491,8 @@ impl AggregationCircuit {
     }
 
     /// Auto-configure the circuit and change the circuit's internal configuration parameters.
-    pub fn config(&mut self, k: u32, minimum_rows: Option<usize>) -> BaseConfigParams {
-        let mut new_config = self.inner.circuit.0.builder.borrow().config(k as usize, minimum_rows);
-        new_config.lookup_bits = self.inner.circuit.0.config_params.lookup_bits;
-        self.inner.circuit.0.config_params = new_config.clone();
-        new_config
+    pub fn config(&mut self, minimum_rows: Option<usize>) -> AggregationConfigParams {
+        self.inner.config(minimum_rows).try_into().unwrap()
     }
 
     pub fn break_points(&self) -> MultiPhaseThreadBreakPoints {

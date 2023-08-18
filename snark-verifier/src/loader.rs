@@ -67,6 +67,12 @@ pub trait LoadedScalar<F: PrimeField>: Clone + Debug + PartialEq + FieldOps {
         acc
     }
 
+    /// Returns power to exponent, where exponent is also [`LoadedScalar`].
+    /// If `Loader` is for Halo2, then `exp` must have at most `exp_max_bits` bits (otherwise constraints will fail).
+    ///
+    /// Currently **unimplemented** for EvmLoader
+    fn pow_var(&self, exp: &Self, exp_max_bits: usize) -> Self;
+
     /// Returns powers up to exponent `n-1`.
     fn powers(&self, n: usize) -> Vec<Self> {
         iter::once(self.loader().load_one())

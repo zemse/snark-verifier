@@ -65,6 +65,15 @@ pub trait IntegerInstructions<F: PrimeField>: Clone + Debug {
         lhs: &Self::AssignedInteger,
         rhs: &Self::AssignedInteger,
     );
+
+    /// Returns `base^exponent` and constrains that `exponent` has at most `max_bits` bits.
+    fn pow_var(
+        &self,
+        ctx: &mut Self::Context,
+        base: &Self::AssignedInteger,
+        exponent: &Self::AssignedInteger,
+        max_bits: usize,
+    ) -> Self::AssignedInteger;
 }
 
 /// Instructions to handle elliptic curve point operations.
@@ -232,6 +241,16 @@ mod halo2_lib {
             b: &Self::AssignedInteger,
         ) {
             ctx.main(0).constrain_equal(a, b);
+        }
+
+        fn pow_var(
+            &self,
+            ctx: &mut Self::Context,
+            base: &Self::AssignedInteger,
+            exponent: &Self::AssignedInteger,
+            max_bits: usize,
+        ) -> Self::AssignedInteger {
+            GateInstructions::pow_var(self, ctx.main(0), *base, *exponent, max_bits)
         }
     }
 

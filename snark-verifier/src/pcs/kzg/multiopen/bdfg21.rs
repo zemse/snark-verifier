@@ -6,7 +6,7 @@ use crate::{
         PolynomialCommitmentScheme, Query,
     },
     util::{
-        arithmetic::{CurveAffine, Fraction, MultiMillerLoop, PrimeField},
+        arithmetic::{CurveAffine, Fraction, MultiMillerLoop, PrimeField, Rotation},
         msm::Msm,
         transcript::TranscriptRead,
         Itertools,
@@ -37,7 +37,7 @@ where
 
     fn read_proof<T>(
         _: &KzgSuccinctVerifyingKey<M::G1Affine>,
-        _: &[Query<M::Fr>],
+        _: &[Query<Rotation>],
         transcript: &mut T,
     ) -> Result<Bdfg21Proof<M::G1Affine, L>, Error>
     where
@@ -50,7 +50,7 @@ where
         svk: &KzgSuccinctVerifyingKey<M::G1Affine>,
         commitments: &[Msm<M::G1Affine, L>],
         z: &L::LoadedScalar,
-        queries: &[Query<M::Fr, L::LoadedScalar>],
+        queries: &[Query<Rotation, L::LoadedScalar>],
         proof: &Bdfg21Proof<M::G1Affine, L>,
     ) -> Result<Self::Output, Error> {
         let sets = query_sets(queries);
@@ -106,24 +106,29 @@ where
     }
 }
 
-fn query_sets<F: PrimeField + Ord, T: Clone>(queries: &[Query<F, T>]) -> Vec<QuerySet<F, T>> {
+fn query_sets<S: PartialEq + Ord + Copy, T: Clone>(queries: &[Query<S, T>]) -> Vec<QuerySet<S, T>> {
     let poly_shifts =
-        queries.iter().fold(Vec::<(usize, Vec<F>, Vec<&T>)>::new(), |mut poly_shifts, query| {
+        queries.iter().fold(Vec::<(usize, Vec<_>, Vec<&T>)>::new(), |mut poly_shifts, query| {
             if let Some(pos) = poly_shifts.iter().position(|(poly, _, _)| *poly == query.poly) {
                 let (_, shifts, evals) = &mut poly_shifts[pos];
-                if !shifts.contains(&query.shift) {
-                    shifts.push(query.shift);
+                if !shifts.iter().map(|(shift, _)| shift).contains(&query.shift) {
+                    shifts.push((query.shift, query.loaded_shift.clone()));
                     evals.push(&query.eval);
                 }
             } else {
-                poly_shifts.push((query.poly, vec![query.shift], vec![&query.eval]));
+                poly_shifts.push((
+                    query.poly,
+                    vec![(query.shift, query.loaded_shift.clone())],
+                    vec![&query.eval],
+                ));
             }
             poly_shifts
         });
 
-    poly_shifts.into_iter().fold(Vec::<QuerySet<F, T>>::new(), |mut sets, (poly, shifts, evals)| {
+    poly_shifts.into_iter().fold(Vec::<QuerySet<_, T>>::new(), |mut sets, (poly, shifts, evals)| {
         if let Some(pos) = sets.iter().position(|set| {
-            BTreeSet::from_iter(set.shifts.iter()) == BTreeSet::from_iter(shifts.iter())
+            BTreeSet::from_iter(set.shifts.iter().map(|(shift, _)| shift))
+                == BTreeSet::from_iter(shifts.iter().map(|(shift, _)| shift))
         }) {
             let set = &mut sets[pos];
             if !set.polys.contains(&poly) {
@@ -132,7 +137,7 @@ fn query_sets<F: PrimeField + Ord, T: Clone>(queries: &[Query<F, T>]) -> Vec<Que
                     set.shifts
                         .iter()
                         .map(|lhs| {
-                            let idx = shifts.iter().position(|rhs| lhs == rhs).unwrap();
+                            let idx = shifts.iter().position(|rhs| lhs.0 == rhs.0).unwrap();
                             evals[idx]
                         })
                         .collect(),
@@ -147,18 +152,20 @@ fn query_sets<F: PrimeField + Ord, T: Clone>(queries: &[Query<F, T>]) -> Vec<Que
 }
 
 fn query_set_coeffs<F: PrimeField + Ord, T: LoadedScalar<F>>(
-    sets: &[QuerySet<F, T>],
+    sets: &[QuerySet<Rotation, T>],
     z: &T,
     z_prime: &T,
 ) -> Vec<QuerySetCoeff<F, T>> {
-    let loader = z.loader();
-
-    let superset = sets.iter().flat_map(|set| set.shifts.clone()).sorted().dedup();
+    // map of shift => loaded_shift, removing duplicate `shift` values
+    // shift is the rotation, not omega^rotation, to ensure BTreeMap does not depend on omega (otherwise ordering can change)
+    let superset = BTreeMap::from_iter(sets.iter().flat_map(|set| set.shifts.clone()));
 
     let size = sets.iter().map(|set| set.shifts.len()).chain(Some(2)).max().unwrap();
     let powers_of_z = z.powers(size);
     let z_prime_minus_z_shift_i = BTreeMap::from_iter(
-        superset.map(|shift| (shift, z_prime.clone() - z.clone() * loader.load_const(&shift))),
+        superset
+            .into_iter()
+            .map(|(shift, loaded_shift)| (shift, z_prime.clone() - z.clone() * loaded_shift)),
     );
 
     let mut z_s_1 = None;
@@ -187,19 +194,22 @@ fn query_set_coeffs<F: PrimeField + Ord, T: LoadedScalar<F>>(
 }
 
 #[derive(Clone, Debug)]
-struct QuerySet<'a, F, T> {
-    shifts: Vec<F>,
+struct QuerySet<'a, S, T> {
+    shifts: Vec<(S, T)>, // vec of (shift, loaded_shift)
     polys: Vec<usize>,
     evals: Vec<Vec<&'a T>>,
 }
 
-impl<'a, F: PrimeField, T: LoadedScalar<F>> QuerySet<'a, F, T> {
+impl<'a, S, T> QuerySet<'a, S, T> {
     fn msm<C: CurveAffine, L: Loader<C, LoadedScalar = T>>(
         &self,
-        coeff: &QuerySetCoeff<F, T>,
+        coeff: &QuerySetCoeff<C::Scalar, T>,
         commitments: &[Msm<'a, C, L>],
         powers_of_mu: &[T],
-    ) -> Msm<C, L> {
+    ) -> Msm<C, L>
+    where
+        T: LoadedScalar<C::Scalar>,
+    {
         self.polys
             .iter()
             .zip(self.evals.iter())
@@ -242,10 +252,10 @@ where
     T: LoadedScalar<F>,
 {
     fn new(
-        shifts: &[F],
+        shifts: &[(Rotation, T)],
         powers_of_z: &[T],
         z_prime: &T,
-        z_prime_minus_z_shift_i: &BTreeMap<F, T>,
+        z_prime_minus_z_shift_i: &BTreeMap<Rotation, T>,
         z_s_1: &Option<T>,
     ) -> Self {
         let loader = z_prime.loader();
@@ -258,9 +268,9 @@ where
                     .iter()
                     .enumerate()
                     .filter(|&(i, _)| i != j)
-                    .map(|(_, shift_i)| (*shift_j - shift_i))
+                    .map(|(_, shift_i)| (shift_j.1.clone() - &shift_i.1))
                     .reduce(|acc, value| acc * value)
-                    .unwrap_or(F::ONE)
+                    .unwrap_or_else(|| loader.load_const(&F::ONE))
             })
             .collect_vec();
 
@@ -270,17 +280,18 @@ where
         let barycentric_weights = shifts
             .iter()
             .zip(normalized_ell_primes.iter())
-            .map(|(shift, normalized_ell_prime)| {
-                loader.sum_products_with_coeff(&[
-                    (*normalized_ell_prime, z_pow_k_minus_one, z_prime),
-                    (-(*normalized_ell_prime * shift), z_pow_k_minus_one, z),
-                ])
+            .map(|((_, loaded_shift), normalized_ell_prime)| {
+                let tmp = normalized_ell_prime.clone() * z_pow_k_minus_one;
+                loader.sum_products(&[(&tmp, z_prime), (&-(tmp.clone() * loaded_shift), z)])
             })
             .map(Fraction::one_over)
             .collect_vec();
 
         let z_s = loader.product(
-            &shifts.iter().map(|shift| z_prime_minus_z_shift_i.get(shift).unwrap()).collect_vec(),
+            &shifts
+                .iter()
+                .map(|(shift, _)| z_prime_minus_z_shift_i.get(shift).unwrap())
+                .collect_vec(),
         );
         let z_s_1_over_z_s = z_s_1.clone().map(|z_s_1| Fraction::new(z_s_1, z_s.clone()));
 
@@ -330,9 +341,9 @@ impl<M> CostEstimation<M::G1Affine> for KzgAs<M, Bdfg21>
 where
     M: MultiMillerLoop,
 {
-    type Input = Vec<Query<M::Fr>>;
+    type Input = Vec<Query<Rotation>>;
 
-    fn estimate_cost(_: &Vec<Query<M::Fr>>) -> Cost {
+    fn estimate_cost(_: &Vec<Query<Rotation>>) -> Cost {
         Cost { num_commitment: 2, num_msm: 2, ..Default::default() }
     }
 }
