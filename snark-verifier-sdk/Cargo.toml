@@ -46,8 +46,8 @@ tui = { version = "0.19", default-features = false, features = ["crossterm"] }
 
 [features]
 default = [
-    "loader_halo2",
-    "loader_evm",
+    #"loader_halo2",
+    #"loader_evm",
     "halo2-axiom",
     "halo2-base/jemallocator",
     "display",
