@@ -1,6 +1,6 @@
 [package]
 name = "snark-verifier"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 
 [dependencies]
@@ -15,10 +15,10 @@ serde = { version = "1.0", features = ["derive"] }
 pairing = { version = "0.23" }
 
 # Use halo2-base as non-optional dependency because it re-exports halo2_proofs, halo2curves, and poseidon, using different repos based on feature flag "halo2-axiom" or "halo2-pse"
-halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", branch = "release-0.4.0-rc", default-features = false }
+halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", branch = "release-0.4.1-rc", default-features = false }
 
 # loader_halo2
-halo2-ecc = { git = "https://github.com/axiom-crypto/halo2-lib.git", branch = "release-0.4.0-rc", default-features = false, optional = true }
+halo2-ecc = { git = "https://github.com/axiom-crypto/halo2-lib.git", branch = "release-0.4.1-rc", default-features = false, optional = true }
 
 # parallel
 rayon = { version = "1.8", optional = true }

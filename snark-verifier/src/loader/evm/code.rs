@@ -21,7 +21,7 @@ impl SolidityAssemblyCode {
             "
 // SPDX-License-Identifier: MIT
 
-pragma solidity 0.8.19;
+pragma solidity >=0.8.19 <0.8.21;
 
 contract Halo2Verifier {{
     fallback(bytes calldata) external returns (bytes memory) {{

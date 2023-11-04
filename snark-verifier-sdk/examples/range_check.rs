@@ -14,7 +14,7 @@ use snark_verifier_sdk::{
     Snark,
 };
 
-fn generate_circuit(k: u32) -> Snark {
+fn generate_circuit(k: u32, fill: bool) -> Snark {
     let lookup_bits = k as usize - 1;
     let circuit_params = BaseCircuitParams {
         k: k as usize,
@@ -30,20 +30,31 @@ fn generate_circuit(k: u32) -> Snark {
     let ctx = builder.main(0);
 
     let x = ctx.load_witness(Fr::from(14));
-    range.range_check(ctx, x, 2 * lookup_bits + 1);
-    range.gate().add(ctx, x, x);
+    if fill {
+        for _ in 0..2 << k {
+            range.gate().add(ctx, x, x);
+        }
+    }
 
     let params = gen_srs(k);
     // do not call calculate_params, we want to use fixed params
     let pk = gen_pk(&params, &builder, None);
+    // std::fs::remove_file(Path::new("examples/app.pk")).ok();
+    // let _pk = gen_pk(&params, &builder, Some(Path::new("examples/app.pk")));
+    // let pk = read_pk::<BaseCircuitBuilder<_>>(
+    //     Path::new("examples/app.pk"),
+    //     builder.config_params.clone(),
+    // )
+    // .unwrap();
+    // std::fs::remove_file(Path::new("examples/app.pk")).ok();
     // builder now has break_point set
     gen_snark_shplonk(&params, &pk, builder, None::<&str>)
 }
 
 fn main() {
-    let dummy_snark = generate_circuit(9);
+    let dummy_snark = generate_circuit(9, false);
 
-    let k = 14u32;
+    let k = 16u32;
     let lookup_bits = k as usize - 1;
     let params = gen_srs(k);
     let mut agg_circuit = AggregationCircuit::new::<SHPLONK>(
@@ -57,10 +68,14 @@ fn main() {
 
     let start0 = start_timer!(|| "gen vk & pk");
     let pk = gen_pk(&params, &agg_circuit, None);
+    // std::fs::remove_file(Path::new("examples/agg.pk")).ok();
+    // let _pk = gen_pk(&params, &agg_circuit, Some(Path::new("examples/agg.pk")));
     end_timer!(start0);
+    // let pk = read_pk::<AggregationCircuit>(Path::new("examples/agg.pk"), agg_config).unwrap();
+    // std::fs::remove_file(Path::new("examples/agg.pk")).ok();
     let break_points = agg_circuit.break_points();
 
-    let snarks = (10..16).map(generate_circuit).collect_vec();
+    let snarks = (10..16).map(|k| generate_circuit(k, true)).collect_vec();
     for (i, snark) in snarks.into_iter().enumerate() {
         let agg_circuit = AggregationCircuit::new::<SHPLONK>(
             CircuitBuilderStage::Prover,

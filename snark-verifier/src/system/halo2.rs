@@ -716,7 +716,9 @@ impl<C: CurveAffine> Transcript<C, MockChallenge> for MockTranscript<C::Scalar> 
     }
 }
 
-fn transcript_initial_state<C: CurveAffine>(vk: &VerifyingKey<C>) -> C::Scalar {
+/// Returns the transcript initial state of the [VerifyingKey].
+/// Roundabout way to do it because [VerifyingKey] doesn't expose the field.
+pub fn transcript_initial_state<C: CurveAffine>(vk: &VerifyingKey<C>) -> C::Scalar {
     let mut transcript = MockTranscript::default();
     vk.hash_into(&mut transcript).unwrap();
     transcript.0
