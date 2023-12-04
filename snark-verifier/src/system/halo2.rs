@@ -1,4 +1,4 @@
-//! [`halo2_proofs`] proof system
+//! [`halo2_proofs`](crate::halo2_proofs) proof system
 
 use crate::halo2_proofs::{
     plonk::{self, Any, ConstraintSystem, FirstPhase, SecondPhase, ThirdPhase, VerifyingKey},
@@ -7,7 +7,7 @@ use crate::halo2_proofs::{
 };
 use crate::{
     util::{
-        arithmetic::{root_of_unity, CurveAffine, Domain, FieldExt, Rotation},
+        arithmetic::{root_of_unity, CurveAffine, Domain, PrimeField, Rotation},
         Itertools,
     },
     verifier::plonk::protocol::{
@@ -21,7 +21,7 @@ use std::{io, iter, mem::size_of};
 pub mod strategy;
 pub mod transcript;
 
-/// Configuration for converting a [`VerifyingKey`] of [`halo2_proofs`] into
+/// Configuration for converting a [`VerifyingKey`] of [`halo2_proofs`](crate::halo2_proofs) into
 /// [`PlonkProtocol`].
 #[derive(Clone, Debug, Default)]
 pub struct Config {
@@ -78,7 +78,7 @@ impl Config {
     }
 }
 
-/// Convert a [`VerifyingKey`] of [`halo2_proofs`] into [`PlonkProtocol`].
+/// Convert a [`VerifyingKey`] of [`halo2_proofs`](crate::halo2_proofs) into [`PlonkProtocol`].
 pub fn compile<'a, C: CurveAffine, P: Params<'a, C>>(
     params: &P,
     vk: &VerifyingKey<C>,
@@ -141,6 +141,7 @@ pub fn compile<'a, C: CurveAffine, P: Params<'a, C>>(
 
     PlonkProtocol {
         domain,
+        domain_as_witness: None,
         preprocessed,
         num_instance: polynomials.num_instance(),
         num_witness: polynomials.num_witness(),
@@ -161,7 +162,7 @@ impl From<poly::Rotation> for Rotation {
     }
 }
 
-struct Polynomials<'a, F: FieldExt> {
+struct Polynomials<'a, F: PrimeField> {
     cs: &'a ConstraintSystem<F>,
     zk: bool,
     query_instance: bool,
@@ -179,7 +180,7 @@ struct Polynomials<'a, F: FieldExt> {
     num_lookup_z: usize,
 }
 
-impl<'a, F: FieldExt> Polynomials<'a, F> {
+impl<'a, F: PrimeField> Polynomials<'a, F> {
     fn new(
         cs: &'a ConstraintSystem<F>,
         zk: bool,
@@ -474,12 +475,11 @@ impl<'a, F: FieldExt> Polynomials<'a, F> {
     }
 
     fn l_active(&self) -> Expression<F> {
-        Expression::Constant(F::one()) - self.l_last() - self.l_blind()
+        Expression::Constant(F::ONE) - self.l_last() - self.l_blind()
     }
 
     fn system_challenge_offset(&self) -> usize {
-        let num_challenge = self.num_challenge();
-        num_challenge[..num_challenge.len() - 3].iter().sum()
+        self.num_challenge.iter().sum()
     }
 
     fn theta(&self) -> Expression<F> {
@@ -499,7 +499,7 @@ impl<'a, F: FieldExt> Polynomials<'a, F> {
     }
 
     fn permutation_constraints(&'a self, t: usize) -> impl IntoIterator<Item = Expression<F>> + 'a {
-        let one = &Expression::Constant(F::one());
+        let one = &Expression::Constant(F::ONE);
         let l_0 = &Expression::<F>::CommonPolynomial(CommonPolynomial::Lagrange(0));
         let l_last = &self.l_last();
         let l_active = &self.l_active();
@@ -591,7 +591,7 @@ impl<'a, F: FieldExt> Polynomials<'a, F> {
     }
 
     fn lookup_constraints(&'a self, t: usize) -> impl IntoIterator<Item = Expression<F>> + 'a {
-        let one = &Expression::Constant(F::one());
+        let one = &Expression::Constant(F::ONE);
         let l_0 = &Expression::<F>::CommonPolynomial(CommonPolynomial::Lagrange(0));
         let l_last = &self.l_last();
         let l_active = &self.l_active();
@@ -698,7 +698,7 @@ impl<C: CurveAffine> EncodedChallenge<C> for MockChallenge {
 }
 
 #[derive(Default)]
-struct MockTranscript<F: FieldExt>(F);
+struct MockTranscript<F: PrimeField>(F);
 
 impl<C: CurveAffine> Transcript<C, MockChallenge> for MockTranscript<C::Scalar> {
     fn squeeze_challenge(&mut self) -> MockChallenge {
