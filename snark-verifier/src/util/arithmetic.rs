@@ -8,7 +8,7 @@ pub use halo2_curves::{
         prime::PrimeCurveAffine,
         Curve, Group, GroupEncoding,
     },
-    Coordinates, CurveAffine, CurveExt,
+    pairing, Coordinates, CurveAffine, CurveExt,
 };
 use num_bigint::BigUint;
 use num_traits::One;
@@ -22,7 +22,11 @@ use std::{
 };
 
 /// [pairing::MultiMillerLoop] with [`std::fmt::Debug`].
-pub trait MultiMillerLoop: pairing::MultiMillerLoop + Debug {}
+pub trait MultiMillerLoop: pairing::MultiMillerLoop + Debug {
+    #[cfg(feature = "halo2-pse")]
+    /// Scalar type - PSE/halo2 has `Scalar` while Axiom/halo2 has `Fr`.
+    type Fr: PrimeField = Self::Scalar;
+}
 
 impl<M: pairing::MultiMillerLoop + Debug> MultiMillerLoop for M {}
 
