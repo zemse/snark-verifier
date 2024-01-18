@@ -1,12 +1,10 @@
-name: CI
+name: Release
 
 on:
   pull_request:
-    branches:
-      - ["main", "release-*"]
+    branches: ["main", "release-*"]
   push:
-    branches:
-      - main
+    branches: ["main"]
 
 jobs:
   test:

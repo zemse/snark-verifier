@@ -1120,15 +1120,14 @@ checksum = "eabb4a44450da02c90444cf74558da904edde8fb4e9035a9a6a4e15445af0bd7"
 
 [[package]]
 name = "halo2-axiom"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "caa28f319d49a0c23297d7c6792528dc31a7f2fc7d6b13a8d54836bf2a2c08c5"
+version = "0.4.2"
 dependencies = [
  "blake2b_simd",
  "crossbeam",
  "ff",
  "group",
  "halo2curves-axiom",
+ "itertools 0.11.0",
  "maybe-rayon",
  "pairing",
  "rand",
@@ -1140,9 +1139,9 @@ dependencies = [
 
 [[package]]
 name = "halo2-base"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5eeb378fa79d4904b626da0c08dcafd974e8194928c73cdccdcdd00796441a8"
+checksum = "0f2045beb3860227b7d354419f2b25a17ad05b2cd68d553dbb9cbbf35daef9d0"
 dependencies = [
  "getset",
  "halo2-axiom",
@@ -1162,12 +1161,12 @@ dependencies = [
 
 [[package]]
 name = "halo2-ecc"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09cfe18bc332c7b2b50100442ed0dd24dea87d1ca16a4eb8912d0875960b0176"
+checksum = "aeba4bd49c6eb05815a9809e749f1db525b26b17f5cafb40c5d9a9a4d483f541"
 dependencies = [
  "halo2-base",
- "itertools 0.10.5",
+ "itertools 0.11.0",
  "num-bigint",
  "num-integer",
  "num-traits",
@@ -1182,9 +1181,9 @@ dependencies = [
 
 [[package]]
 name = "halo2curves-axiom"
-version = "0.4.3"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d47eaec6a3040c2fbaa020716bf571b0c55025126242510f774183aff84b92e"
+checksum = "4a11fd188635e09153d007ac33300d0af76972342b2f5ca3f116cba8c759f57d"
 dependencies = [
  "blake2b_simd",
  "ff",
@@ -2535,7 +2534,7 @@ dependencies = [
 
 [[package]]
 name = "snark-verifier"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "ark-std 0.3.0",
  "crossterm 0.25.0",
@@ -2562,7 +2561,7 @@ dependencies = [
 
 [[package]]
 name = "snark-verifier-sdk"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "ark-std 0.3.0",
  "bincode",
@@ -3215,3 +3214,11 @@ dependencies = [
  "quote",
  "syn 2.0.38",
 ]
+
+[[patch.unused]]
+name = "halo2-base"
+version = "0.4.1"
+
+[[patch.unused]]
+name = "halo2-ecc"
+version = "0.4.1"
