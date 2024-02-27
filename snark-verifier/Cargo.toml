@@ -53,7 +53,7 @@ crossterm = { version = "0.25" }
 ratatui = { version = "0.24", default-features = false, features = ["crossterm"] }
 
 [features]
-default = ["loader_evm", "loader_halo2", "halo2-axiom", "display"]
+default = ["loader_evm", "loader_halo2", "halo2-pse", "display"]
 display = ["halo2-base/display", "halo2-ecc?/display"]
 loader_halo2 = ["halo2-ecc"]
 loader_evm = ["dep:sha3", "dep:ruint"]

@@ -15,6 +15,7 @@ use crate::{
         QuotientPolynomial,
     },
 };
+
 use num_integer::Integer;
 use std::{io, iter, mem::size_of};
 
@@ -83,7 +84,11 @@ pub fn compile<'a, C: CurveAffine, P: Params<'a, C>>(
     params: &P,
     vk: &VerifyingKey<C>,
     config: Config,
-) -> PlonkProtocol<C> {
+) -> PlonkProtocol<C>
+where
+    <C as halo2_base::halo2_proofs::arithmetic::CurveAffine>::ScalarExt:
+        pairing::group::ff::FromUniformBytes<64>,
+{
     assert_eq!(vk.get_domain().k(), params.k());
 
     let cs = vk.cs();
@@ -627,7 +632,9 @@ impl<'a, F: PrimeField> Polynomials<'a, F> {
                     lookup,
                     (z, z_omega, permuted_input, permuted_input_omega_inv, permuted_table),
                 )| {
-                    let input = compress(lookup.input_expressions());
+                    let val = lookup.input_expressions();
+                    let val = &val[0];
+                    let input = compress(val.as_slice());
                     let table = compress(lookup.table_expressions());
                     iter::empty()
                         .chain(Some(l_0 * (one - z)))
@@ -717,7 +724,11 @@ impl<C: CurveAffine> Transcript<C, MockChallenge> for MockTranscript<C::Scalar> 
 
 /// Returns the transcript initial state of the [VerifyingKey].
 /// Roundabout way to do it because [VerifyingKey] doesn't expose the field.
-pub fn transcript_initial_state<C: CurveAffine>(vk: &VerifyingKey<C>) -> C::Scalar {
+pub fn transcript_initial_state<C: CurveAffine>(vk: &VerifyingKey<C>) -> C::Scalar
+where
+    <C as halo2_base::halo2_proofs::arithmetic::CurveAffine>::ScalarExt:
+        pairing::group::ff::FromUniformBytes<64>,
+{
     let mut transcript = MockTranscript::default();
     vk.hash_into(&mut transcript).unwrap();
     transcript.0

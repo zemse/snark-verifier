@@ -53,7 +53,7 @@ crossterm = { version = "0.25" }
 ratatui = { version = "0.24", default-features = false, features = ["crossterm"] }
 
 [features]
-default = ["loader_halo2", "loader_evm", "halo2-axiom", "halo2-base/jemallocator", "display"]
+default = ["loader_halo2", "loader_evm", "halo2-pse", "halo2-base/jemallocator", "display"]
 display = ["snark-verifier/display", "dep:ark-std"]
 loader_halo2 = ["snark-verifier/loader_halo2"]
 loader_evm = ["snark-verifier/loader_evm", "dep:ethereum-types"]
